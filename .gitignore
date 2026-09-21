@@ -5,3 +5,6 @@ diffsinger-m55-full-source.tar.gz
 diffsinger-m55-to-m58-combined-bundle.tar.gz
 diffsinger-m55-to-m58-combined-bundle/
 release/
+models/
+:memory:.ses
+tools/run_long_e2e_m53.py

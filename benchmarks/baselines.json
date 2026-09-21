@@ -1,0 +1,47 @@
+{
+  "policy_version": 2,
+  "minimum_stable_improvement_percent": 3.0,
+  "baselines": {
+    "e2e": {
+      "name": "M58 all3711 plus selective K3 and asymmetric K7/K11 VNNI",
+      "predecessor": "M55 long-audio P8SMT",
+      "tag": "e2e-k117-asym-pass-20260921",
+      "model_sha256": "c171db642e6b26d6802165136f7cf91f90b42458527a7b911ff9ff0bec6c8e18",
+      "audio_ms": 4458.231,
+      "baseline_median_ms": 4516.780,
+      "candidate_median_ms": 4169.898,
+      "candidate_median_rtf": 0.935326,
+      "stable_improvement_percent": 8.32,
+      "candidate_p90_ms": 4334.976,
+      "candidate_worst_ms": 4650.379,
+      "candidate_cv": 0.045,
+      "samples": "benchmarks/artifacts/2026-09-21-e2e-k117-asym/samples.tsv",
+      "status": "verified"
+    },
+    "kernel_range_residual_k7_k11": {
+      "name": "M58 t24 range-residual",
+      "git_commit": "0ad5e0b",
+      "tag": "m58-kernel-pass-20260921",
+      "status": "verified"
+    },
+    "kernel_range_residual_k3_late": {
+      "name": "K3 t24 range-residual Cin32/Cin64",
+      "status": "informational-after-e2e-pass"
+    },
+    "vocoder_vnni_k7_cin128_asym": {
+      "name": "asymmetric K7/K11 VNNI at Cin128",
+      "quality_cosine": 0.999244295,
+      "quality_snr_db": 28.20,
+      "status": "verified-by-e2e-pass"
+    }
+  },
+  "environment_baselines": {
+    "i5-13420h-performance-pcore0": {
+      "cpu": "13th Gen Intel Core i5-13420H",
+      "power_profile": "performance",
+      "affinity": "cpu0",
+      "status": "active",
+      "required_warmup_processes": 2
+    }
+  }
+}

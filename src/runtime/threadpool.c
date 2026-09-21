@@ -443,7 +443,11 @@ static void run_2d_task(DSAsmThreadPool *p,const DSAsmJob *j,size_t task,size_t 
         const size_t t0=ti*tile;
         size_t tc=j->M-t0; if(tc>tile)tc=tile;
         const size_t block_floats=j->K*j->P*pack;
-        if(j->residual && (j->T&4u) && (t0%24u)==0 && (tc%24u)==0 && j->P==7u)
+        if(j->residual && (j->T&4u) && (j->K==32u || j->K==64u) && (t0%24u)==0 && (tc%24u)==0 && j->P==3u)
+            ds_conv1d_nct_f32_avx2_oc4_t24_range_k3_residual(
+                j->x,j->w+ob*block_floats,j->b0+ob*pack,j->y+ob*pack*j->M,
+                j->K,j->P,t0,tc,j->Q,j->R,j->M,j->residual+ob*pack*j->M);
+        else if(j->residual && (j->T&4u) && (t0%24u)==0 && (tc%24u)==0 && j->P==7u)
             ds_conv1d_nct_f32_avx2_oc4_t24_range_k7_residual(
                 j->x,j->w+ob*block_floats,j->b0+ob*pack,j->y+ob*pack*j->M,
                 j->K,j->P,t0,tc,j->Q,j->R,j->M,j->residual+ob*pack*j->M);

@@ -40,4 +40,4 @@ static int one(size_t K,size_t C,size_t T, rrfn fn){
   printf("M58 range-residual K%zu C=%zu T=%zu tile=%zu max_abs=%.9g bitdiff=%zu old=%.3fms new=%.3fms speedup=%.3fx\n",K,C,T,tile,ma,diff,to/it,tn/it,to/tn);
   free(x);free(w);free(b);free(r);free(a);free(n);return (ma==0.0f&&diff==0)?0:1;
 }
-int main(void){int rc=0;rc|=one(7,128,24576,ds_conv1d_nct_f32_avx2_oc4_t24_range_k7_residual);rc|=one(11,128,24576,ds_conv1d_nct_f32_avx2_oc4_t24_range_k11_residual);rc|=one(7,32,98304,ds_conv1d_nct_f32_avx2_oc4_t24_range_k7_residual);rc|=one(11,32,98304,ds_conv1d_nct_f32_avx2_oc4_t24_range_k11_residual);return rc;}
+int main(void){int rc=0;rc|=one(3,128,24576,ds_conv1d_nct_f32_avx2_oc4_t24_range_k3_residual);rc|=one(7,128,24576,ds_conv1d_nct_f32_avx2_oc4_t24_range_k7_residual);rc|=one(11,128,24576,ds_conv1d_nct_f32_avx2_oc4_t24_range_k11_residual);rc|=one(3,64,49152,ds_conv1d_nct_f32_avx2_oc4_t24_range_k3_residual);rc|=one(3,32,98304,ds_conv1d_nct_f32_avx2_oc4_t24_range_k3_residual);rc|=one(7,32,98304,ds_conv1d_nct_f32_avx2_oc4_t24_range_k7_residual);rc|=one(11,32,98304,ds_conv1d_nct_f32_avx2_oc4_t24_range_k11_residual);return rc;}

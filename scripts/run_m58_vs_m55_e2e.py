@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import shutil
@@ -12,13 +11,12 @@ from pathlib import Path
 
 
 PROJECT = Path(os.environ.get("PROJECT", Path(__file__).resolve().parents[1])).resolve()
-MODEL = Path(os.environ.get("MODEL", PROJECT / "model/DongFangZhiZi_Nectar_DiffSinger_CE_26.08.31"))
+MODEL = Path(os.environ.get("MODEL", PROJECT / "models/DongFangZhiZi_Nectar_DiffSinger_CE_26.08.31"))
 PYTHON = Path(os.environ.get("PY", PROJECT / ".venv/bin/python"))
 BASE = PROJECT / "build/m53_long/f384"
 FIXTURE = BASE / "fixture"
 BASELINE_BUNDLE = BASE / "nsf.dsv35"
 OUT = PROJECT / "build/m58_e2e"
-RUNNER = PROJECT / "milestone_runners/M55/run_long_e2e_m53.py"
 
 
 def run(command: list[object], env: dict[str, str] | None = None) -> None:
@@ -75,7 +73,7 @@ def require_inputs() -> None:
         raise SystemExit("missing M55 comparison prerequisites:\n  " + "\n  ".join(missing))
 
 
-def benchmark_env() -> dict[str, str]:
+def benchmark_env(label: str) -> dict[str, str]:
     env = os.environ.copy()
     env.update(
         DSASM_2D="1",
@@ -89,8 +87,8 @@ def benchmark_env() -> dict[str, str]:
         DSASM_K3_TMODE="24",
         DSASM_K7_T24="1",
         DSASM_K11_T24="1",
-        DSASM_VNNI="k11",
-        DSASM_VNNI_ASYM="0",
+        DSASM_VNNI="k11" if label == "baseline" else "k117",
+        DSASM_VNNI_ASYM="0" if label == "baseline" else "1",
         DSASM_VNNI_CIN="128",
         DSASM_GOLDEN_COS="0.999",
         DSASM_GOLDEN_SNR="25",
@@ -98,35 +96,37 @@ def benchmark_env() -> dict[str, str]:
     return env
 
 
-def measure(label: str, bundle: Path, index: int, cpus: str) -> float:
+def measure(label: str, bundle: Path, index: int, cpus: str) -> list[float]:
     work = OUT / f"{index:02d}_{label}"
     if work.exists():
         shutil.rmtree(work)
-    run(
-        [
-            PYTHON,
-            RUNNER,
-            "run",
-            "--project", PROJECT,
-            "--packed-acoustic", PROJECT / "build/m42_acoustic",
-            "--acoustic-cli", PROJECT / "build/dsasm-acoustic",
-            "--vocoder-bundle", bundle,
-            "--vocoder-cli", PROJECT / "build/dsasm-vocoder-m40",
-            "--vocoder-onnx", MODEL / "dsvocoder/nsf_hifigan.onnx",
-            "--speaker-emb", MODEL / "dongfangzhizi-nectar-xiao.emb",
-            "--fixture", FIXTURE,
-            "--work", work,
-            "--frames", "384",
-            "--cpus", cpus,
-            "--threads", str(len(parse_cpu_list(cpus))),
-        ],
-        benchmark_env(),
-    )
-    result = json.loads((work / "result.json").read_text())
-    return float(result["total_ms"])
+    work.mkdir(parents=True)
+    command = [
+        "taskset", "-c", cpus,
+        PROJECT / "build/persistent-e2e",
+        "--model", PROJECT / "build/m42_acoustic",
+        "--vocoder", bundle,
+        "--fixture", FIXTURE,
+        "--speaker-emb", MODEL / "dongfangzhizi-nectar-xiao.emb",
+        "--workers", str(len(parse_cpu_list(cpus))),
+        "--warmup", "2",
+        "--requests", "5",
+        "--steps", "4",
+        "--depth", "0.6",
+    ]
+    print("+ " + " ".join(map(str, command)), flush=True)
+    process = subprocess.run(list(map(str, command)), cwd=PROJECT, env=benchmark_env(label), text=True,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=True)
+    print(process.stdout, end="")
+    (work / "run.log").write_text(process.stdout)
+    values = [float(value) for value in re.findall(r"^E2E request\d+ .* total=([0-9.]+)", process.stdout, re.MULTILINE)]
+    if len(values) != 5:
+        raise SystemExit(f"expected five persistent samples, got {len(values)}")
+    return values
 
 
 def main() -> None:
+    run(["make", "-j" + str(os.cpu_count() or 1), "build/persistent-e2e", "build/dsasm-vocoder-m40"])
     require_inputs()
     OUT.mkdir(parents=True, exist_ok=True)
     candidate = OUT / "m58-all3711.dsv35"
@@ -146,10 +146,10 @@ def main() -> None:
 
     cpus = p_core_smt()
     samples: list[tuple[str, float]] = []
-    sequence = ["baseline", "candidate", "candidate", "baseline"] * 3
+    sequence = ["baseline", "candidate", "candidate", "baseline"]
     bundles = {"baseline": BASELINE_BUNDLE, "candidate": candidate}
     for index, label in enumerate(sequence, 1):
-        samples.append((label, measure(label, bundles[label], index, cpus)))
+        samples.extend((label, value) for value in measure(label, bundles[label], index, cpus))
 
     sample_file = OUT / "samples.tsv"
     sample_file.write_text("".join(f"e2e\t{label}\t{value:.6f}\n" for label, value in samples))

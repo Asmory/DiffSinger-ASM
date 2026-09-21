@@ -1,0 +1,19 @@
+Target: Intel Core i5-13420H, CPUs 0-7 (four P-cores plus SMT), 8 workers
+Workload: DongFangZhiZi 384 frames / 196608 samples / 4458.231 ms audio
+
+Vocoder-only ABBA, symmetric K11 baseline versus symmetric K7/K11 screen:
+baseline medians: 3202.664 ms, 2857.987 ms
+candidate medians: 2873.208 ms, 2748.604 ms
+baseline counters: 107268375921/108499084820 cycles, 183441665465/183441645015 instructions
+candidate counters: 94756958871/95760043699 cycles, 167562206373/167562223281 instructions
+
+The symmetric K7/K11 screen failed quality:
+cosine=0.998402204 SNR=24.96 dB
+
+Asymmetric K7/K11 Cin128 quality/performance probe:
+median=2932.528 ms
+cycles=96459512200 instructions=167540392560
+cosine=0.999244295 SNR=28.20 dB
+
+The asymmetric factor was accepted only after the complete E2E ABBA gate in
+samples.tsv passed by 8.32% with improved p90, worst and CV.

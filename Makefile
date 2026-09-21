@@ -1151,7 +1151,14 @@ m40-1: m40-1-check
 # M58: bit-exact late-stage range + residual-store kernels. Performance is
 # measured separately by scripts/run_m58_micro.sh so correctness tests do not
 # become flaky under system load.
-.PHONY: m58-check m58-bench
+.PHONY: m58-check m58-bench k3-range-bench persistent-e2e
+
+PERSISTENT_E2E_OBJS := $(sort $(M24_OBJS) $(M35_VOCODER_OBJS))
+
+$(BUILD)/persistent-e2e: tools/persistent_e2e.c $(PERSISTENT_E2E_OBJS)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(PERSISTENT_E2E_OBJS) -o $@ -lm -pthread
+
+persistent-e2e: $(BUILD)/persistent-e2e
 
 $(BUILD)/test_m58_range_residual: tools/test_m58_range_residual.c $(BUILD)/conv1d_m39_kspec.o $(BUILD)/conv1d_m38_range_residual.o
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/conv1d_m39_kspec.o $(BUILD)/conv1d_m38_range_residual.o -o $@ $(LDFLAGS)
@@ -1161,3 +1168,6 @@ m58-check: $(BUILD)/test_m58_range_residual
 
 m58-bench: $(BUILD)/test_m58_range_residual
 	bash scripts/run_m58_micro.sh
+
+k3-range-bench: $(BUILD)/test_m58_range_residual
+	bash scripts/run_k3_range_micro.sh

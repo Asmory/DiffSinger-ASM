@@ -163,6 +163,8 @@ void ds_conv1d_nct_f32_avx2_oc4_t24_k7_residual(
     const float*,const float*,const float*,float*,size_t,size_t,size_t,size_t,size_t,size_t,const float*);
 void ds_conv1d_nct_f32_avx2_oc4_t24_k11_residual(
     const float*,const float*,const float*,float*,size_t,size_t,size_t,size_t,size_t,size_t,const float*);
+void ds_conv1d_nct_f32_avx2_oc4_t24_range_k3_residual(
+    const float*,const float*,const float*,float*,size_t,size_t,size_t,size_t,size_t,size_t,size_t,const float*);
 void ds_conv1d_nct_f32_avx2_oc4_t24_range_k7(
     const float*,const float*,const float*,float*,size_t,size_t,size_t,size_t,size_t,size_t,size_t);
 /* M58: 2-D range K7 t24 with residual fused into the final stores. */

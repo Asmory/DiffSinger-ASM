@@ -2673,6 +2673,150 @@ ds_conv1d_nct_f32_avx2_oc4_t24_k3_residual:
 
 
 .text
+# Post-M58 K3 counterpart: one packed oc8 block, t24 range tile, residual fused.
+.globl ds_conv1d_nct_f32_avx2_oc4_t24_range_k3_residual
+.type ds_conv1d_nct_f32_avx2_oc4_t24_range_k3_residual,@function
+ds_conv1d_nct_f32_avx2_oc4_t24_range_k3_residual:
+    push rbp
+    mov rbp, rsp
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp, 32
+
+    test r8, r8
+    jz .rr3_done
+    mov r12, r8
+    mov r13, QWORD PTR [rbp+32]
+    shl r13, 2
+    mov r14, QWORD PTR [rbp+48]
+    shl r14, 2
+    mov r15, QWORD PTR [rbp+40]
+    shl r15, 2
+    mov r10, QWORD PTR [rbp+16]
+    mov rbx, QWORD PTR [rbp+24]
+    test rbx, rbx
+    jz .rr3_done
+    test r10, 23
+    jnz .rr3_done
+    test rbx, 23
+    jnz .rr3_done
+    mov QWORD PTR [rsp+0], rdi
+    mov QWORD PTR [rsp+8], r10
+    add rbx, r10
+    mov QWORD PTR [rsp+16], rbx
+    mov rax, QWORD PTR [rbp+56]
+    mov QWORD PTR [rsp+24], rax
+
+    xor r8d, r8d
+.rr3_half:
+    mov r10, QWORD PTR [rsp+8]
+.rr3_t:
+    cmp r10, QWORD PTR [rsp+16]
+    jae .rr3_next_half
+
+    lea rdi, [rdx+r8]
+    vbroadcastss ymm0, DWORD PTR [rdi+0]
+    vmovaps ymm1, ymm0
+    vmovaps ymm2, ymm0
+    vbroadcastss ymm3, DWORD PTR [rdi+4]
+    vmovaps ymm4, ymm3
+    vmovaps ymm5, ymm3
+    vbroadcastss ymm6, DWORD PTR [rdi+8]
+    vmovaps ymm7, ymm6
+    vmovaps ymm8, ymm6
+    vbroadcastss ymm9, DWORD PTR [rdi+12]
+    vmovaps ymm10, ymm9
+    vmovaps ymm11, ymm9
+
+    mov r11, QWORD PTR [rsp+0]
+    lea r11, [r11+r10*4]
+    mov rax, rsi
+    add rax, r8
+    mov r9, r12
+.rr3_ci:
+    mov rdi, r11
+    M48_K3_T24_STEP
+    M48_K3_T24_STEP
+    M48_K3_T24_STEP
+    add r11, r13
+    dec r9
+    jnz .rr3_ci
+
+    mov rdi, r8
+    shr rdi, 2
+    imul rdi, r14
+    mov rax, QWORD PTR [rsp+24]
+    add rax, rdi
+    add rdi, rcx
+    lea rdi, [rdi+r10*4]
+    lea rax, [rax+r10*4]
+
+    vmovups ymm12, YMMWORD PTR [rax+0]
+    vaddps ymm0, ymm0, ymm12
+    vmovups YMMWORD PTR [rdi+0], ymm0
+    vmovups ymm12, YMMWORD PTR [rax+32]
+    vaddps ymm1, ymm1, ymm12
+    vmovups YMMWORD PTR [rdi+32], ymm1
+    vmovups ymm12, YMMWORD PTR [rax+64]
+    vaddps ymm2, ymm2, ymm12
+    vmovups YMMWORD PTR [rdi+64], ymm2
+    add rdi, r14
+    add rax, r14
+    vmovups ymm12, YMMWORD PTR [rax+0]
+    vaddps ymm3, ymm3, ymm12
+    vmovups YMMWORD PTR [rdi+0], ymm3
+    vmovups ymm12, YMMWORD PTR [rax+32]
+    vaddps ymm4, ymm4, ymm12
+    vmovups YMMWORD PTR [rdi+32], ymm4
+    vmovups ymm12, YMMWORD PTR [rax+64]
+    vaddps ymm5, ymm5, ymm12
+    vmovups YMMWORD PTR [rdi+64], ymm5
+    add rdi, r14
+    add rax, r14
+    vmovups ymm12, YMMWORD PTR [rax+0]
+    vaddps ymm6, ymm6, ymm12
+    vmovups YMMWORD PTR [rdi+0], ymm6
+    vmovups ymm12, YMMWORD PTR [rax+32]
+    vaddps ymm7, ymm7, ymm12
+    vmovups YMMWORD PTR [rdi+32], ymm7
+    vmovups ymm12, YMMWORD PTR [rax+64]
+    vaddps ymm8, ymm8, ymm12
+    vmovups YMMWORD PTR [rdi+64], ymm8
+    add rdi, r14
+    add rax, r14
+    vmovups ymm12, YMMWORD PTR [rax+0]
+    vaddps ymm9, ymm9, ymm12
+    vmovups YMMWORD PTR [rdi+0], ymm9
+    vmovups ymm12, YMMWORD PTR [rax+32]
+    vaddps ymm10, ymm10, ymm12
+    vmovups YMMWORD PTR [rdi+32], ymm10
+    vmovups ymm12, YMMWORD PTR [rax+64]
+    vaddps ymm11, ymm11, ymm12
+    vmovups YMMWORD PTR [rdi+64], ymm11
+
+    add r10, 24
+    jmp .rr3_t
+.rr3_next_half:
+    add r8, 16
+    cmp r8, 32
+    jb .rr3_half
+.rr3_done:
+    vzeroupper
+    add rsp, 32
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    pop rbp
+    ret
+.size ds_conv1d_nct_f32_avx2_oc4_t24_range_k3_residual,.-ds_conv1d_nct_f32_avx2_oc4_t24_range_k3_residual
+
+
+.text
 # M58 surgical path: one packed oc8 block, K=7, t24 range tile, residual fused
 # into the store. SysV args:
 #   rdi x, rsi w_block8, rdx bias8, rcx y_block, r8 Cin, r9 K,

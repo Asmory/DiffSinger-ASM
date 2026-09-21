@@ -16,9 +16,42 @@ is promoted only when all of these conditions hold on the target workload:
 
 The fastest single sample is diagnostic only. It is never a release gate.
 
+Baselines are tracked independently in `benchmarks/baselines.json`:
+
+- the E2E baseline is the only release objective and requires a stable 3%
+  improvement by itself;
+- when E2E passes, subsystem baselines are informational and cannot veto it;
+- only when E2E fails do measured subsystem weights select the next change;
+- a subsystem change must make the weighted subsystem total pass before it is
+  sent back to the E2E gate, but it never promotes the release on its own;
+- a weighted subsystem decision uses measured parent-profile time share,
+  statistical confidence and controllability. Missing weights block aggregation
+  instead of being guessed;
+- parity is a hard veto. E2E regression is also a hard veto regardless of
+  subsystem score;
+- an observed distribution shift may create a context baseline without a
+  causal claim. Its machine/configuration fingerprint and sample distribution
+  must be recorded so unlike populations are not silently mixed.
+
+Weighted TSV rows add a fourth field. The weight must come from a measured
+parent profile, with confidence/controllability adjustments recorded alongside
+the raw profile:
+
+```text
+case<TAB>baseline|candidate<TAB>milliseconds<TAB>effective_weight
+```
+
+Apply it with `tools/check_perf_gate.py samples.tsv --weighted`. The tool uses
+weighted latency ratios, not a count of winning cases.
+
 The machine should be otherwise idle. Pin the benchmark to the four P-cores
 and their SMT siblings (`0-7` on the measured i5-13420H). Record frequency,
 thermal and power state when comparing results across sessions.
+
+For microbenchmarks, `i5-13420h-performance-pcore0` is the current context
+baseline. The runner discards two full-process warmups and writes
+`build/k3_range/environment.txt`. Context baselines are empirical strata, not
+claims that a particular recorded variable caused the distribution shift.
 
 ## Source inputs
 
@@ -64,29 +97,69 @@ to attribute the speedup between the two kernels.
 
 Raw generated data lives under `build/m58/` and is intentionally not tracked.
 
-## E2E gate still required
+## E2E reproduction
 
-The supplied archives contain neither the real voicebank nor the prepared
-384-frame M53 fixture. Therefore this workspace cannot honestly claim a new
-E2E release result yet. M55 remains the verified E2E baseline (`median RTF
-0.779`), while the fused tree is a kernel-qualified candidate.
-
-After placing the voicebank at `$MODEL` and preparing the M53 fixture, run the
+With the voicebank at `$MODEL` and the M53 384-frame fixture prepared, run the
 direct historical-best comparison:
 
 ```bash
 python scripts/run_m58_vs_m55_e2e.py
 ```
 
-It compares only the M53/M55 `k7ge128` bundle against a newly packed M58
-`all3711` bundle, using repeated ABBA order, identical M55 runtime settings and
-the same P8SMT affinity. It writes the samples and applies the same gate:
+It compares only the M53/M55 `k7ge128` bundle against a newly packed fused
+candidate, using persistent warm requests, ABBA process order and the same
+P8SMT affinity. M55 retains its historical symmetric K11 VNNI settings; the
+candidate enables the independently quality-gated asymmetric K7/K11 path at
+Cin128. The runner writes samples and applies the same gate automatically.
 
 ```bash
 python tools/check_perf_gate.py e2e-samples.tsv --minimum 3
 ```
 
-Only an E2E PASS should move the release baseline from M55 to the fused tree.
+Only an E2E PASS moves the release baseline.
+
+## 2026-09-21 persistent E2E promotion
+
+The supplied DongFangZhiZi archive was loaded end to end. Its SHA-256 is
+`c171db642e6b26d6802165136f7cf91f90b42458527a7b911ff9ff0bec6c8e18`. The acoustic importer
+packed FS2, AUX and RF with feature flags `0x1ff`; native acoustic output was
+bit-exact with the prepared fixture. The 384-frame vocoder waveform passed at
+cosine `0.999244295` and SNR `28.20 dB` for the promoted candidate.
+
+The first cold-process ABBA attempt failed (`-2.72%`) and exposed a measurement
+problem: every sample paid process/load effects and mixed them with one acoustic
+and vocoder request. The gate was changed, not the threshold. The final runner
+loads each graph once, performs two full E2E warmups, collects five persistent
+requests, and uses process order M55/candidate/candidate/M55. An initial
+symmetric-K11 candidate appeared 3.22% faster once, but a clean rerun measured
+`-0.00%` with p90 regression. It was not promoted.
+
+Subsystem profiling then measured about 5.2% vocoder improvement from fusion,
+which should have been enough after weighting by the observed E2E time share,
+but acoustic/frequency variation hid that gain in E2E. Shape profiling found
+Cin128/K7 convolution as a remaining measured hotspot. Symmetric K7 VNNI was
+fast but failed quality (cosine `0.998402204`, SNR `24.96 dB`); asymmetric K7
+VNNI passed quality and made the complete E2E gate pass. It is therefore a new
+subsystem baseline, based on the E2E result rather than a causal claim.
+
+Final ten-sample-per-side result:
+
+| Metric | M55 baseline | Candidate | Result |
+| --- | ---: | ---: | --- |
+| Median total | 4516.780 ms | 4169.898 ms | 8.32% faster |
+| Median RTF | 1.013 | 0.935 | improved |
+| p90 total | 4980.026 ms | 4334.976 ms | improved |
+| Worst total | 5036.183 ms | 4650.379 ms | improved |
+| CV | 0.050 | 0.045 | improved |
+
+This passes the E2E promotion rule. Subsystem results are informational for this
+iteration. If a later E2E candidate fails, measured subsystem weights are used
+to guide changes. If their weighted prediction passes while E2E still fails,
+profiling targets the unmodelled residual; a factor becomes a new subsystem
+baseline only after changing it helps the E2E gate pass.
+
+Tracked raw samples and profiler evidence are under
+`benchmarks/artifacts/2026-09-21-e2e-k117-asym/`.
 
 ## Reproduction checks
 

@@ -58,7 +58,7 @@ ds_linear_f32_avx2_m4n16_idxstrided:
  lea rax,[r11+r14]
  lea rbx,[rax+r14]
  xor r13d,r13d                         # one shared byte offset for all 4 rows
-.k4:
+.linear_m4n16_idxstrided_k4:
  vmovups ymm9,YMMWORD PTR [rsi]
  vmovups ymm10,YMMWORD PTR [rsi+32]
  vbroadcastss ymm8,DWORD PTR [r10+r13]
@@ -76,7 +76,7 @@ ds_linear_f32_avx2_m4n16_idxstrided:
  add rsi,64
  add r13,4
  cmp r13,r14
- jb .k4
+ jb .linear_m4n16_idxstrided_k4
  vmovups YMMWORD PTR [rcx],ymm0
  vmovups YMMWORD PTR [rcx+32],ymm1
  lea r10,[rcx+r15]

@@ -15,7 +15,7 @@
 #define DSASM_MAX_N_TILE 256u
 #define DSASM_DEFAULT_M_TILE 16u
 #define DSASM_DEFAULT_N_TILE 128u
-#define DSASM_VOCODER_T_TILE_DEFAULT 504u
+#define DSASM_VOCODER_T_TILE_DEFAULT 2016u
 
 static size_t vocoder_t_tile(void){
     static size_t cached=0;
@@ -27,8 +27,8 @@ static size_t vocoder_t_tile(void){
     return cached=(size_t)v;
 }
 
-/* M50 release profile: the perf-guided M45-M49 winners become defaults.
-   Environment variables remain explicit escape hatches for A/B and fallback. */
+/* Promoted persistent E2E profile. Environment variables remain explicit
+   escape hatches for A/B and fallback. */
 static int env_bool_default(const char *name,int def){
     const char *e=getenv(name);
     if(!e||!*e)return def;
@@ -561,9 +561,18 @@ static void *worker(void *vp){
     }
 }
 
-DSAsmThreadPool *ds_threadpool_create(size_t n){
-    size_t selected=0;int affinity=0;int *cpus=select_worker_cpus(n,&selected,&affinity);
-    if(cpus) n=selected; else if(n<1) n=1;
+static DSAsmThreadPool *threadpool_create_range(size_t n,size_t cpu_offset){
+    size_t selected=0;int affinity=0;size_t requested=n;
+    if(requested && cpu_offset<=SIZE_MAX-requested) requested+=cpu_offset;
+    else if(cpu_offset) return NULL;
+    int *cpus=select_worker_cpus(requested,&selected,&affinity);
+    if(cpus){
+        if(cpu_offset>=selected){free(cpus);return NULL;}
+        size_t available=selected-cpu_offset;
+        if(!n||n>available)n=available;
+        memmove(cpus,cpus+cpu_offset,n*sizeof(*cpus));
+    }else if(cpu_offset)return NULL;
+    else if(n<1)n=1;
     DSAsmThreadPool *p=calloc(1,sizeof(*p)); if(!p){free(cpus);return NULL;}
     p->n=n;p->cpus=cpus;p->affinity_enabled=affinity;p->use_2d=1;p->atan_pipeline=1;p->auto_tiles=1;p->parallel_depthwise=0;p->indexed_linear=0;
     /* M18 freeze: repeated target-machine A/B showed Kblock=512 and N-owner
@@ -603,6 +612,8 @@ DSAsmThreadPool *ds_threadpool_create(size_t n){
     }
     return p;
 }
+DSAsmThreadPool *ds_threadpool_create(size_t n){return threadpool_create_range(n,0);}
+DSAsmThreadPool *ds_threadpool_create_range(size_t n,size_t cpu_offset){return threadpool_create_range(n,cpu_offset);}
 DSAsmThreadPool *ds_threadpool_create_auto(void){return ds_threadpool_create(0);}
 void ds_threadpool_destroy(DSAsmThreadPool *p){if(!p)return;if(p->spin_dispatch){atomic_store_explicit(&p->spin_stop,1,memory_order_relaxed);atomic_fetch_add_explicit(&p->spin_generation,1,memory_order_release);}else{pthread_mutex_lock(&p->mu);p->stop=1;p->generation++;pthread_cond_broadcast(&p->start_cv);pthread_mutex_unlock(&p->mu);}for(size_t i=0;i<p->n;i++)pthread_join(p->threads[i],NULL);pthread_mutex_destroy(&p->mu);pthread_cond_destroy(&p->start_cv);pthread_cond_destroy(&p->done_cv);free(p->threads);free(p->args);free(p->scratch);free(p->cpus);free(p);}
 size_t ds_threadpool_threads(const DSAsmThreadPool *p){return p?p->n:0;}

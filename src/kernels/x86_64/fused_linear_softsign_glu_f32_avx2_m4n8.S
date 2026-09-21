@@ -79,7 +79,7 @@ ds_fused_linear_softsign_glu_f32_avx2_m4n8:
     lea rbx, [rax + r14]
     mov r13, QWORD PTR [rbp + 24]     # k remaining
 
-.k4:
+.softsign_glu_m4n8_k4:
     vmovups ymm8, YMMWORD PTR [rsi]
     vmovups ymm9, YMMWORD PTR [rsi + 32]
 
@@ -105,7 +105,7 @@ ds_fused_linear_softsign_glu_f32_avx2_m4n8:
     add rbx, 4
     add rsi, 64
     dec r13
-    jnz .k4
+    jnz .softsign_glu_m4n8_k4
 
     # Vector softsign + gate multiply, row 0.
     vandps ymm10, ymm4, YMMWORD PTR [rip + .L_abs_mask8]

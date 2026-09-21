@@ -52,7 +52,7 @@ ds_vnni_conv1d_u8s8_t8_oc8:
     vpxor ymm7,ymm7,ymm7
     mov rax,rsi                     # weight block start
     mov r11,r13
-.k4:
+.vnni_conv_k4:
     vmovdqu ymm8,YMMWORD PTR [rdi]
     vpbroadcastd ymm9,DWORD PTR [rax+0]
     {vex} vpdpbusd ymm0,ymm8,ymm9
@@ -73,7 +73,7 @@ ds_vnni_conv1d_u8s8_t8_oc8:
     add rdi,32
     add rax,32
     dec r11
-    jnz .k4
+    jnz .vnni_conv_k4
 
     # integer zero-point correction, dequantize, bias, NCT store.
     mov rax,r10

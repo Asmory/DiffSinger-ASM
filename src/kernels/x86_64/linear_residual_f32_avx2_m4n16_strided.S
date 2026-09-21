@@ -49,7 +49,7 @@ ds_linear_residual_f32_avx2_m4n16_strided:
  lea rax,[r11+r14]
  lea rbx,[rax+r14]
  mov r13,QWORD PTR [rbp+24]
-.k4:
+.linear_residual_m4n16_strided_k4:
  vmovups ymm8,YMMWORD PTR [rsi]
  vmovups ymm9,YMMWORD PTR [rsi+32]
  vbroadcastss ymm10,DWORD PTR [r10]
@@ -70,7 +70,7 @@ ds_linear_residual_f32_avx2_m4n16_strided:
  add rbx,4
  add rsi,64
  dec r13
- jnz .k4
+ jnz .linear_residual_m4n16_strided_k4
  # row0
  vaddps ymm0,ymm0,YMMWORD PTR [rcx]
  vaddps ymm1,ymm1,YMMWORD PTR [rcx+32]

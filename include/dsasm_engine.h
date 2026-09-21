@@ -14,7 +14,7 @@ extern "C" {
 #define DSASM_API __attribute__((visibility("default")))
 #endif
 
-#define DSASM_ENGINE_ABI_VERSION 1u
+#define DSASM_ENGINE_ABI_VERSION 2u
 
 typedef struct dsasm_engine dsasm_engine;
 
@@ -70,7 +70,9 @@ typedef struct dsasm_request {
     const float *spec_max;
     size_t spec_range_dims;
     uint32_t overlap_frames;
-    uint32_t reserved1;
+    /* Exact fixed-shape vocoder bucket used for the whole request. Zero
+       selects the smallest loaded bucket. */
+    uint32_t vocoder_bucket_frames;
 } dsasm_request;
 
 static inline dsasm_request dsasm_request_init(void) {

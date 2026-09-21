@@ -10,6 +10,7 @@ int main(int argc, char **argv) {
     if (request.struct_size != sizeof(request)) return 2;
     if (request.abi_version != DSASM_ENGINE_ABI_VERSION) return 3;
     if (offsetof(dsasm_request, token_ids) % sizeof(void *) != 0) return 4;
+    if (sizeof(dsasm_request) != 192) return 8;
     char support_reason[128];
     if (!dsasm_engine_is_supported(support_reason, sizeof(support_reason))) {
         fprintf(stderr, "unsupported runtime: %s\n", support_reason);
@@ -32,6 +33,6 @@ int main(int argc, char **argv) {
         dsasm_engine_destroy(engine);
         puts("DSASM persistent engine load: OK");
     }
-    puts("DSASM engine ABI v1: OK");
+    puts("DSASM engine ABI v2: OK");
     return 0;
 }

@@ -51,15 +51,24 @@ int main(int argc, char **argv) {
     request.depth = .6f;
     request.steps = 1;
     request.overlap_frames = 8;
+    request.vocoder_bucket_frames = 32;
 
     CallbackState state = {0};
     int rc = dsasm_engine_render(engine, &request, on_pcm, &state);
     size_t expected = FRAMES * dsasm_engine_hop_size(engine);
-    if (rc || state.next_offset != expected || state.callbacks != 2 || state.finals != 1) {
+    const size_t expected_callbacks = 1 + (FRAMES - 1) / (32 - request.overlap_frames);
+    if (rc || state.next_offset != expected || state.callbacks != expected_callbacks || state.finals != 1) {
         fprintf(stderr, "render rc=%d error=%s samples=%llu/%zu callbacks=%zu finals=%zu\n",
             rc, dsasm_engine_last_error(engine),
             (unsigned long long)state.next_offset, expected, state.callbacks, state.finals);
         return 5;
+    }
+    request.vocoder_bucket_frames = 33;
+    rc = dsasm_engine_render(engine, &request, on_pcm, &state);
+    if (rc != DSASM_E_UNSUPPORTED) {
+        fprintf(stderr, "missing bucket rc=%d error=%s\n", rc,
+            dsasm_engine_last_error(engine));
+        return 6;
     }
     printf("DSASM stream: callbacks=%zu samples=%zu final=%zu OK\n",
         state.callbacks, expected, state.finals);

@@ -1,4 +1,4 @@
-# DSASM engine ABI v1
+# DSASM engine ABI v2
 
 `build/libdsasm.so` is the product-facing library. Its exported surface is
 limited to `dsasm_engine_*`; model, graph, and thread-pool structs remain
@@ -30,7 +30,7 @@ have the acoustic model's mel-bin count and `model.conf` hop size:
 384.dsv35
 ```
 
-Call `dsasm_engine_is_supported()` for the `Auto` backend check; ABI v1 requires
+Call `dsasm_engine_is_supported()` for the `Auto` backend check; ABI v2 requires
 Linux x86-64 with AVX2 and FMA. `dsasm_engine_create()` mmaps every model once,
 creates one persistent thread pool shared by acoustic inference and every
 vocoder bucket, and retains grow-on-demand inference buffers between calls. One engine
@@ -45,13 +45,14 @@ otherwise `model.conf` values are used. `mel2ph` is 1-based. Passing durations
 instead lets the engine construct it. A single speaker embedding row is
 broadcast without requiring C# to duplicate it.
 
-The first vocoder call always uses the smallest bucket. Later calls use the
-smallest bucket that fits the remaining frames, or the largest bucket for a
-long remainder. Eight frames overlap by default (set `overlap_frames` to a
-nonzero custom value). The engine withholds each block's overlap tail, blends
-it with the next block, and only then publishes immutable mono float32 PCM.
-Callback offsets are contiguous output sample offsets and the last callback
-has `is_final=1`.
+`vocoder_bucket_frames` selects one exact fixed-shape bucket for the complete
+request. Zero selects the smallest loaded bucket. A nonzero unavailable size
+returns `DSASM_E_UNSUPPORTED`; the engine never silently expands a streaming
+request to a larger bucket. Eight frames overlap by default (set
+`overlap_frames` to a nonzero custom value). The engine withholds each block's
+overlap tail, blends it with the next block, and only then publishes immutable
+mono float32 PCM. Callback offsets are contiguous output sample offsets and the
+last callback has `is_final=1`.
 
 Cancellation is lock-free. `dsasm_engine_cancel()` invalidates the active
 request; the render call observes it before and after acoustic inference and
@@ -60,7 +61,7 @@ between vocoder buckets. Destroy an engine only after its render call returns.
 ## C# loading
 
 Use `NativeLibrary.Load()` with an absolute path, resolve
-`dsasm_engine_abi_version` first, and require version 1 before resolving the
+`dsasm_engine_abi_version` first, and require version 2 before resolving the
 remaining delegates. Keep delegates and the PCM callback rooted for the whole
 native call. The callback buffer is borrowed and must be copied into an owned
 array before returning.

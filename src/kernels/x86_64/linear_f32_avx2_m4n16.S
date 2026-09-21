@@ -57,7 +57,7 @@ ds_linear_f32_avx2_m4n16:
  lea rax,[r11+r14]
  lea rbx,[rax+r14]
  mov r13,QWORD PTR [rbp+16]
-.k4:
+.linear_m4n16_k4:
  vmovups ymm9,YMMWORD PTR [rsi]
  vmovups ymm10,YMMWORD PTR [rsi+32]
  vbroadcastss ymm8,DWORD PTR [r10]
@@ -78,7 +78,7 @@ ds_linear_f32_avx2_m4n16:
  add rbx,4
  add rsi,64
  dec r13
- jnz .k4
+    jnz .linear_m4n16_k4
  vmovups YMMWORD PTR [rcx],ymm0
  vmovups YMMWORD PTR [rcx+32],ymm1
  lea r10,[rcx+r15]

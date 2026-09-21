@@ -1,6 +1,8 @@
 CC ?= gcc
+CXX ?= c++
 PYTHON ?= python
 CFLAGS ?= -O3 -Wall -Wextra -std=c11 -march=native
+CXXFLAGS ?= -O3 -Wall -Wextra -std=c++17 -march=native
 CPPFLAGS ?= -Iinclude -Isrc/runtime
 LDFLAGS ?= -lm
 BUILD := build
@@ -815,6 +817,15 @@ $(BUILD)/test_engine_abi: tests/test_engine_abi.c $(BUILD)/libdsasm.so
 
 $(BUILD)/test_engine_stream: tests/test_engine_stream.c $(BUILD)/libdsasm.so
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -L$(BUILD) -Wl,-rpath,'$$ORIGIN' -ldsasm -o $@
+
+$(BUILD)/bench_engine_stream: tools/bench_engine_stream.c $(BUILD)/libdsasm.so
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< -L$(BUILD) -Wl,-rpath,'$$ORIGIN' -ldsasm -o $@ -lm
+
+$(BUILD)/probe_stage_pipeline: tools/probe_stage_pipeline.c $(M24_OBJS) $(M35_VOCODER_OBJS)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(sort $(M24_OBJS) $(M35_VOCODER_OBJS)) -o $@ -lm -pthread
+
+$(BUILD)/bench_onednn_conv: tools/bench_onednn_conv.cpp $(M35_VOCODER_OBJS)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< $(M35_VOCODER_OBJS) -o $@ -ldnnl -lm -pthread
 
 engine-check: $(BUILD)/test_engine_abi
 	./$(BUILD)/test_engine_abi

@@ -13,6 +13,9 @@ typedef struct DSAsmThreadPool DSAsmThreadPool;
    - Workers are pinned with pthread_setaffinity_np when possible.
    - threads==0 selects all preferred logical CPUs automatically. */
 DSAsmThreadPool *ds_threadpool_create(size_t threads);
+/* Selects a disjoint slice of the topology-aware CPU order. This is intended
+   for concurrent stage pools; offset is measured in logical CPUs. */
+DSAsmThreadPool *ds_threadpool_create_range(size_t threads, size_t cpu_offset);
 DSAsmThreadPool *ds_threadpool_create_auto(void);
 void ds_threadpool_destroy(DSAsmThreadPool *pool);
 size_t ds_threadpool_threads(const DSAsmThreadPool *pool);

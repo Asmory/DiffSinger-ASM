@@ -32,7 +32,7 @@ def stats(values: list[float]) -> dict[str, float]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("input", type=Path, help="TSV rows: case, variant, milliseconds[, measured_weight]")
-    parser.add_argument("--minimum", type=float, default=3.0, help="minimum median improvement in percent")
+    parser.add_argument("--minimum", type=float, default=5.0, help="minimum median improvement in percent")
     parser.add_argument("--max-cv", type=float, default=0.10, help="maximum candidate coefficient of variation")
     parser.add_argument("--weighted", action="store_true", help="aggregate cases using measured parent-profile weights")
     args = parser.parse_args()

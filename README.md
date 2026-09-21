@@ -176,12 +176,11 @@ done
 ### OpenUtau
 
 Build or install the OpenUtau integration referenced above, then point it at
-this DiffSinger-ASM checkout. Load the promoted inference profile in the same
-shell before launching OpenUtau:
+this DiffSinger-ASM checkout. The promoted inference profile is built into the
+runtime defaults, so OpenUtau does not need tuning environment variables:
 
 ```bash
 cd /absolute/path/to/DiffSinger-ASM
-. config/best-inference.env
 export DIFFSINGER_ASM_HOME=/absolute/path/to/DiffSinger-ASM
 # Launch OpenUtau from this environment.
 ```
@@ -256,9 +255,11 @@ also headerless float32 arrays.
 
 ## Best Inference Profile
 
-[`config/best-inference.env`](config/best-inference.env) is the canonical
-release environment. It enables the exact graph, scheduling, residual-fusion,
-and asymmetric VNNI choices that passed the current end-to-end gate.
+The runtime defaults enable the exact graph, scheduling, residual-fusion, and
+asymmetric VNNI choices that passed the current end-to-end gate.
+[`config/best-inference.env`](config/best-inference.env) records those values
+explicitly for reproducible benchmarking and lets deployments override or
+disable individual optimizations.
 
 ```bash
 . config/best-inference.env
@@ -297,11 +298,12 @@ The full real-voicebank E2E comparison needs locally prepared model and fixture
 artifacts and is documented in [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 Voicebanks and singer embeddings are intentionally not distributed here.
 
-The OpenUtau integration currently passes its streaming mixer and ABI tests
-(13/13), builds with zero warnings and errors, and agrees with the native
-192-byte `dsasm_request` layout. Native real-model streaming has also been
-validated. A full phrase played from an actual OpenUtau project remains the
-final GUI-level acceptance check.
+The native ABI v2 keeps the 192-byte `dsasm_request` layout and adds explicit
+fixed vocoder-bucket selection. A request using zero selects the smallest
+loaded bucket; a nonzero unavailable bucket is rejected instead of silently
+expanding the render and delaying its next PCM callback. The external OpenUtau
+binding must require ABI version 2 and map the former trailing reserved field
+to `vocoder_bucket_frames`.
 
 ## Architecture
 
@@ -325,6 +327,10 @@ stable product boundary; lower-level headers remain implementation-oriented.
 ## Documentation
 
 - [Performance policy and current evidence](docs/PERFORMANCE.md)
+- [Dual-architecture optimization strategy](docs/DUAL_ARCHITECTURE_OPTIMIZATION.md)
+- [Real-time streaming performance policy](docs/STREAMING_PERFORMANCE.md)
+- [Block batch performance policy](docs/BATCH_PERFORMANCE.md)
+- [CPU runtime implementation policy](docs/RUNTIME_IMPLEMENTATION_POLICY.md)
 - [Stable engine ABI and streaming contract](docs/ENGINE_ABI.md)
 - [CI and release process](docs/RELEASING.md)
 - [Deployment ONNX import](docs/M25_ONNX_DEPLOYMENT.md)

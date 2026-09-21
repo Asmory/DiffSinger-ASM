@@ -58,20 +58,26 @@ primary strata are 32 and 64 acoustic frames. Tests include at least 10 warm-up
 regions followed by at least 25 measured regions so initial boost clocks do not
 hide sustained package-power behavior.
 
-The service gate is absolute:
+The service target is absolute:
 
 - every measured region has RTF below 1;
 - every callback arrives before previously published PCM is exhausted;
 - output passes the model-specific golden/parity gate and contains only finite
   samples.
 
-Median RTF does not participate in promotion. Before the service gate passes,
-work targets measured worst-case latency. After it passes, optimization follows
-a CPU-load staircase. CPU-RTF is process CPU time divided by generated audio
-duration and approximates the number of continuously occupied cores per track.
-Measure baseline and candidate at least three times after warm-up, take the
-largest CPU-RTF from each set, and require at least a 5% reduction while every
-run continues to pass the service gate.
+Median RTF does not participate in promotion. Before the service target passes,
+optimization follows a worst-RTF staircase: compare at least three thermally
+steady runs with the current streaming champion and promote only when the
+candidate's largest worst RTF is at least 5% lower, output quality passes, and
+deadline misses do not increase. The champion may therefore advance through
+several measured 5% steps before it crosses RTF 1.
+
+After every run has worst RTF below 1 with zero deadline misses, the primary
+metric switches to CPU load. CPU-RTF is process CPU time divided by generated
+audio duration and approximates the number of continuously occupied cores per
+track. Take the largest CPU-RTF from at least three baseline and candidate runs,
+and require at least a 5% reduction while every run continues to pass the
+service target.
 
 Multi-track capacity is a second discrete staircase. Run independent resident
 engines concurrently, starting with two tracks. Increase by exactly one track

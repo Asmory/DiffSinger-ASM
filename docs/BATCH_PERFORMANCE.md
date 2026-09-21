@@ -23,8 +23,13 @@ Use the same instrument with a batch-sized region:
 ```sh
 make build/bench_engine_stream
 ./build/bench_engine_stream PACKED_ACOUSTIC VOCODER_BUCKET_DIR SPEAKER_EMB \
-  --frames 384 --regions 7 --warmup 2 --workers 8 --bucket 384 --steps 4
+  --frames 384 --regions 7 --warmup 2 --workers 8 --bucket 384 --steps 4 \
+  --golden BATCH384_GOLDEN_PCM_F32
 ```
+
+Formal baseline and promotion runs must supply the golden waveform generated
+offline from the exact acoustic request used by the benchmark. A finite-only
+run is diagnostic and cannot establish or replace the batch champion.
 
 The explicit ABI v2 bucket field is the scheduling boundary: real-time requests
 select a measured small bucket, while batch requests select 384. The engine

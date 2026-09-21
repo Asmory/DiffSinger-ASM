@@ -7,7 +7,7 @@ is promoted only when all of these conditions hold on the target workload:
 
 - output parity passes before timing is considered;
 - at least five interleaved or paired samples are collected after warmup;
-- candidate median latency improves by at least 3% over the current baseline;
+- candidate median latency improves by at least 5% over the current baseline;
 - candidate p90 and worst latency do not regress;
 - candidate coefficient of variation (CV) is at most 0.10, or no more than
   0.01 above the paired baseline CV when package power/frequency drifts both;
@@ -18,7 +18,7 @@ The fastest single sample is diagnostic only. It is never a release gate.
 
 Baselines are tracked independently in `benchmarks/baselines.json`:
 
-- the E2E baseline is the only release objective and requires a stable 3%
+- the E2E baseline is the only release objective and requires a stable 5%
   improvement by itself;
 - when E2E passes, subsystem baselines are informational and cannot veto it;
 - only when E2E fails do measured subsystem weights select the next change;
@@ -113,7 +113,7 @@ candidate enables the independently quality-gated asymmetric K7/K11 path at
 Cin128. The runner writes samples and applies the same gate automatically.
 
 ```bash
-python tools/check_perf_gate.py e2e-samples.tsv --minimum 3
+python tools/check_perf_gate.py e2e-samples.tsv --minimum 5
 ```
 
 Only an E2E PASS moves the release baseline.

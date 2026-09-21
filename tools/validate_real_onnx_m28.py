@@ -42,13 +42,19 @@ def packed_torch_reference(packed, work, onnx_path, speaker_emb, depth, steps):
         lids=np.where(lm[toks]>0.5,langs,0)
     else:
         lids=langs
-    x=np.sqrt(np.float32(C))*emb[toks] + np.log1p(dur.astype(np.float32))[:,None]*dw[None,:] + db[None,:] + le[lids]
+    flags=int(fs.get('feature_flags',0))
+    dur_value=dur.astype(np.float32) if flags&(1<<12) else np.log1p(dur.astype(np.float32))
+    x=np.sqrt(np.float32(C))*emb[toks] + dur_value[:,None]*dw[None,:] + db[None,:] + le[lids]
     refs={'embedding':x.copy()}
     xt=torch.from_numpy(x.copy())
-    pos=torch.arange(P,dtype=torch.float32)
-    inv=1.0/(float(fs.get('rope_theta',10000.0)) ** (torch.arange(0,hd,2,dtype=torch.float32)/hd))
-    freqs=torch.einsum('i,j->ij',pos,inv)
-    cos=torch.cos(freqs); sin=torch.sin(freqs)
+    if flags&(1<<11):
+        cos=torch.from_numpy(load_sec(packed,fs,'rope_cos').reshape(-1,hd//2)[:P].copy())
+        sin=torch.from_numpy(load_sec(packed,fs,'rope_sin').reshape(-1,hd//2)[:P].copy())
+    else:
+        pos=torch.arange(P,dtype=torch.float32)
+        inv=1.0/(float(fs.get('rope_theta',10000.0)) ** (torch.arange(0,hd,2,dtype=torch.float32)/hd))
+        freqs=torch.einsum('i,j->ij',pos,inv)
+        cos=torch.cos(freqs); sin=torch.sin(freqs)
     def rot(z):
         # non-interleaved, as exported graph and DSFS25 metadata
         a,b=torch.chunk(z,2,dim=-1)

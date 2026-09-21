@@ -43,6 +43,14 @@ $(BUILD)/atan_glu_m9_strided.o: $(KDIR)/atan_glu_f32_avx2_ystrided.S | $(BUILD)
 	$(CC) -c $< -o $@
 $(BUILD)/add3_m7.o: $(KDIR)/add3_broadcast_f32_avx2.S | $(BUILD)
 	$(CC) -c $< -o $@
+$(BUILD)/rope_m25.o: $(KDIR)/rope_f32_avx2.S | $(BUILD)
+	$(CC) -c $< -o $@
+$(BUILD)/silu_glu_m25.o: $(KDIR)/silu_glu_f32_avx2.S | $(BUILD)
+	$(CC) -c $< -o $@
+$(BUILD)/adaptive_affine_m25.o: $(KDIR)/adaptive_affine_f32_avx2.S | $(BUILD)
+	$(CC) -c $< -o $@
+$(BUILD)/phoneme_mean_m25.o: $(KDIR)/phoneme_mean_f32_avx2.S | $(BUILD)
+	$(CC) -c $< -o $@
 $(BUILD)/dwconv_k31_prelu.o: $(KDIR)/depthwise_conv1d_k31_prelu_f32_avx2.S | $(BUILD)
 	$(CC) -c $< -o $@
 $(BUILD)/linear_packed4.o: $(KDIR)/linear_f32_avx2_packed4.S | $(BUILD)
@@ -448,7 +456,7 @@ clean:
 	rm -rf $(BUILD)
 
 # M24: real-checkpoint pack-all + native CLI
-M24_OBJS := $(BUILD)/model_loader_runtime.o $(BUILD)/full_acoustic_runtime.o $(BUILD)/post_fs2_runtime.o $(BUILD)/aux_decoder_runtime.o $(BUILD)/fs2_front_runtime.o $(BUILD)/acoustic_runtime.o $(BUILD)/reflow_runtime.o $(BUILD)/lynxnet2_runtime.o $(BUILD)/threadpool.o $(BUILD)/vnni_pack_m40_1.o $(BUILD)/conv1d_m32.o $(BUILD)/conv1d_m36.o $(BUILD)/conv1d_m37_range.o $(BUILD)/conv1d_m39_kspec.o $(BUILD)/conv1d_m38_residual.o $(BUILD)/conv1d_m38_range_residual.o $(BUILD)/convtranspose_m33.o $(BUILD)/glu_m6.o $(BUILD)/linear_m4n16.o $(BUILD)/linear_residual_m4n16.o $(BUILD)/linear_m4n16_strided.o $(BUILD)/linear_residual_m4n16_strided.o $(BUILD)/linear_m4n16_idxstrided.o $(BUILD)/linear_residual_m4n16_idxstrided.o $(BUILD)/linear_n16_kblock.o $(BUILD)/layernorm.o $(BUILD)/dwconv_k31_tc.o $(BUILD)/dwconv_k31_tc_cstrided.o $(BUILD)/dwconv_k7_tc.o $(BUILD)/atan_glu_m7.o $(BUILD)/atan_glu_m9_strided.o $(BUILD)/add3_m7.o $(BUILD)/fs2_encoder_runtime.o $(BUILD)/dot_avx2.o $(BUILD)/layernorm_precise.o
+M24_OBJS := $(BUILD)/model_loader_runtime.o $(BUILD)/full_acoustic_runtime.o $(BUILD)/post_fs2_runtime.o $(BUILD)/aux_decoder_runtime.o $(BUILD)/fs2_front_runtime.o $(BUILD)/acoustic_runtime.o $(BUILD)/reflow_runtime.o $(BUILD)/lynxnet2_runtime.o $(BUILD)/threadpool.o $(BUILD)/vnni_pack_m40_1.o $(BUILD)/conv1d_m32.o $(BUILD)/conv1d_m36.o $(BUILD)/conv1d_m37_range.o $(BUILD)/conv1d_m39_kspec.o $(BUILD)/conv1d_m38_residual.o $(BUILD)/conv1d_m38_range_residual.o $(BUILD)/convtranspose_m33.o $(BUILD)/glu_m6.o $(BUILD)/linear_m4n16.o $(BUILD)/linear_residual_m4n16.o $(BUILD)/linear_m4n16_strided.o $(BUILD)/linear_residual_m4n16_strided.o $(BUILD)/linear_m4n16_idxstrided.o $(BUILD)/linear_residual_m4n16_idxstrided.o $(BUILD)/linear_n16_kblock.o $(BUILD)/layernorm.o $(BUILD)/dwconv_k31_tc.o $(BUILD)/dwconv_k31_tc_cstrided.o $(BUILD)/dwconv_k7_tc.o $(BUILD)/atan_glu_m7.o $(BUILD)/atan_glu_m9_strided.o $(BUILD)/add3_m7.o $(BUILD)/add_m33.o $(BUILD)/rope_m25.o $(BUILD)/silu_glu_m25.o $(BUILD)/adaptive_affine_m25.o $(BUILD)/phoneme_mean_m25.o $(BUILD)/fs2_encoder_runtime.o $(BUILD)/dot_avx2.o $(BUILD)/layernorm_precise.o
 
 $(BUILD)/libdsasm_m24.so: $(M24_OBJS)
 	$(CC) -shared -o $@ $^ -lm -pthread

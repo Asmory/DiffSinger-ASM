@@ -14,7 +14,8 @@ static int valid(const DSAsmLynxNet2Weights *w) {
     if (!w || !w->blocks || !w->input_dim || !w->condition_dim || !w->channels ||
         !w->hidden_dim || !w->num_layers || w->kernel_size != 31) return 0;
     if ((w->channels & 15u) || (w->input_dim & 15u) || (w->hidden_dim & 7u)) return 0;
-    if (w->glu_type != DSASM_GLU_ATAN && w->glu_type != DSASM_GLU_SOFTSIGN) return 0;
+    if (w->glu_type != DSASM_GLU_ATAN && w->glu_type != DSASM_GLU_SOFTSIGN &&
+        w->glu_type != DSASM_GLU_SILU) return 0;
     return 1;
 }
 
@@ -57,6 +58,11 @@ static void p_atan_linear(DSAsmThreadPool *p,const float*x,const float*w,const f
     }
     p_linear(p,x,w,b,tmp2n,M,2*N,K);
     ds_atan_glu_f32_avx2(tmp2n,y,M,N);
+}
+static void p_silu_linear(DSAsmThreadPool *p,const float*x,const float*w,const float*b,
+                          float*tmp2n,float*y,size_t M,size_t N,size_t K){
+    p_linear(p,x,w,b,tmp2n,M,2*N,K);
+    ds_silu_glu_f32_avx2(tmp2n,y,M,N);
 }
 
 int ds_lynxnet2_prepare_condition_f32_avx2(
@@ -133,6 +139,9 @@ static int forward_impl(
         if(w->glu_type==DSASM_GLU_ATAN) {
             p_atan_linear(pool,dw,b->glu1_weight,b->glu1_bias,tmp2h,h1,t,h,c);
             p_atan_linear(pool,h1,b->glu2_weight,b->glu2_bias,tmp2h,h2,t,h,h);
+        } else if(w->glu_type==DSASM_GLU_SILU) {
+            p_silu_linear(pool,dw,b->glu1_weight,b->glu1_bias,tmp2h,h1,t,h,c);
+            p_silu_linear(pool,h1,b->glu2_weight,b->glu2_bias,tmp2h,h2,t,h,h);
         } else {
             p_softsign(pool,dw,b->glu1_weight,b->glu1_bias,b->glu1_bias+h,h1,t,h,c);
             p_softsign(pool,h1,b->glu2_weight,b->glu2_bias,b->glu2_bias+h,h2,t,h,h);

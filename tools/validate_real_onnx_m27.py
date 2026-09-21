@@ -31,23 +31,57 @@ def add_output(g,helper,TensorProto,name,shape):
     if any(o.name==name for o in g.output):return
     g.output.append(helper.make_tensor_value_info(name,TensorProto.FLOAT,shape))
 
-def patch_onnx(src,dst,hidden,mel,debug_stages=False):
+def no_stretch_stage_names(model):
+    nodes=list(model.graph.node)
+    by_name={n.name:n for n in nodes}
+    consumers={}
+    for n in nodes:
+        for value in n.input:consumers.setdefault(value,[]).append(n)
+
+    def output_of(name):
+        node=by_name.get(name)
+        if node is None or len(node.output)!=1:
+            raise RuntimeError(f'M27 expected one-output node not found: {name}')
+        return node.output[0]
+
+    def add_after(name):
+        value=output_of(name)
+        found=[n for n in consumers.get(value,[]) if n.op_type=='Add']
+        if len(found)!=1:
+            raise RuntimeError(f'M27 expected one Add after {name}: {[n.name for n in found]}')
+        return found[0]
+
+    gathered=output_of('/fs2/GatherElements')
+    pitch=add_after('/fs2/pitch_embed/Add')
+    key=add_after('/fs2/key_shift_embed/Add') if '/fs2/key_shift_embed/Add' in by_name else None
+    speed=add_after('/fs2/speed_embed/Add') if '/fs2/speed_embed/Add' in by_name else None
+
+    variance=pitch.output[0]
+    if key is not None:
+        key_embed=output_of('/fs2/key_shift_embed/Add')
+        variance=next(value for value in key.input if value!=key_embed)
+    elif speed is not None:
+        speed_embed=output_of('/fs2/speed_embed/Add')
+        variance=next(value for value in speed.input if value!=speed_embed)
+
+    key_stage=key.output[0] if key is not None else variance
+    speed_stage=speed.output[0] if speed is not None else key_stage
+    return ['/fs2/encoder/Mul_6_output_0',gathered,gathered,gathered,
+            pitch.output[0],variance,key_stage,speed_stage,'condition']
+
+def patch_onnx(src,dst,hidden,mel,debug_stages=False,no_stretch=False):
     import onnx
     from onnx import helper, TensorProto
     m=onnx.load(str(src),load_external_data=True)
     add_output(m.graph,helper,TensorProto,'condition',[1,'frames',hidden])
     add_output(m.graph,helper,TensorProto,'aux_mel',[1,'frames',mel])
+    stage_names=[]
     if debug_stages:
-        stages=[
-            ('/fs2/encoder/Mul_6_output_0',[1,'tokens',hidden]),
-            ('/fs2/GatherElements_output_0',[1,'frames',hidden]),
-            ('/fs2/Add_2_output_0',[1,'frames',hidden]),
-            ('/fs2/Add_3_output_0',[1,'frames',hidden]),
-            ('/fs2/Add_5_output_0',[1,'frames',hidden]),
-            ('/fs2/Add_6_output_0',[1,'frames',hidden]),
-            ('/fs2/Add_8_output_0',[1,'frames',hidden]),
-            ('/fs2/Add_9_output_0',[1,'frames',hidden]),
-        ]
+        stage_names=(no_stretch_stage_names(m) if no_stretch else
+                     ['/fs2/encoder/Mul_6_output_0','/fs2/GatherElements_output_0',
+                      '/fs2/Add_2_output_0','/fs2/Add_3_output_0','/fs2/Add_5_output_0',
+                      '/fs2/Add_6_output_0','/fs2/Add_8_output_0','/fs2/Add_9_output_0','condition'])
+        stages=[(name,[1,'tokens' if i==0 else 'frames',hidden]) for i,name in enumerate(stage_names)]
         produced={o for n in m.graph.node for o in n.output}
         for name,shape in stages:
             if name not in produced:
@@ -61,6 +95,7 @@ def patch_onnx(src,dst,hidden,mel,debug_stages=False):
     m.graph.input.append(helper.make_tensor_value_info('noise_external',TensorProto.FLOAT,[1,1,mel,'frames']))
     onnx.save(m,str(dst))
     print(('M27' if debug_stages else 'M26')+f' patched ONNX: {rnd[0].name} {old} -> noise_external; outputs += condition, aux_mel')
+    return stage_names
 
 def parse_model_conf(path):
     d={}
@@ -114,7 +149,9 @@ def main():
         raise SystemExit(f'onnxruntime is required: {e}')
     model=json.loads((a.packed/'model.json').read_text())
     hidden=int(model['fs2']['hidden_size']); mel=int(model['rf']['input_dim']); vocab=int(model['fs2']['vocab_size'])
-    patched=a.work/'acoustic_m27_patched.onnx' if a.fs2_stages else a.work/'acoustic_m26_patched.onnx';patch_onnx(a.onnx,patched,hidden,mel,a.fs2_stages)
+    no_stretch=bool(int(model['fs2'].get('feature_flags',0))&(1<<9))
+    patched=a.work/'acoustic_m27_patched.onnx' if a.fs2_stages else a.work/'acoustic_m26_patched.onnx'
+    stage_onnx_names=patch_onnx(a.onnx,patched,hidden,mel,a.fs2_stages,no_stretch)
     toks=np.array([x for x in read_vocab(a.packed) if 0<x<vocab],np.int64)
     if toks.size<4:raise RuntimeError('could not choose valid tokens')
     dur=np.array([4+(i%4) for i in range(toks.size)],np.int64);T=int(dur.sum());P=int(toks.size)
@@ -143,10 +180,6 @@ def main():
     feed['noise_external']=noise.T[None,None,:,:].astype(np.float32)
     print('M26 ORT inputs:')
     for k in sorted(feed):print(f'  {k:16s} {feed[k].dtype} {list(feed[k].shape)}')
-    stage_onnx_names=[
-        '/fs2/encoder/Mul_6_output_0','/fs2/GatherElements_output_0','/fs2/Add_2_output_0','/fs2/Add_3_output_0',
-        '/fs2/Add_5_output_0','/fs2/Add_6_output_0','/fs2/Add_8_output_0','/fs2/Add_9_output_0'
-    ]
     out_names=['mel','condition','aux_mel']+(stage_onnx_names if a.fs2_stages else [])
     vals=sess.run(out_names,feed)
     ort_mel,ort_cond,ort_aux=vals[:3]

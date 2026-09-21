@@ -20,6 +20,10 @@ typedef struct {
     const float *ffn1_bias;             /* [4C] */
     const float *ffn2_weight_m4n16;     /* packed16 [C,4C] */
     const float *ffn2_bias;             /* [C] */
+    const float *ln1_affine_weight_m4n16; /* optional packed16 [2C,C] */
+    const float *ln1_affine_bias;       /* optional [2C], shift then scale */
+    const float *ln2_affine_weight_m4n16; /* optional packed16 [2C,C] */
+    const float *ln2_affine_bias;       /* optional [2C], shift then scale */
 } DSAsmFS2EncoderLayer;
 
 typedef struct {
@@ -71,6 +75,10 @@ typedef struct {
     const float *speed_weight;          /* [C] */
     const float *speed_bias;            /* [C] */
     const float *stretch_table;         /* [1001,C], deployment-export lookup table */
+    const float *frozen_speaker;        /* [C], model-owned speaker embedding */
+    const float *rope_cos;              /* [rope_max_tokens,C/(2H)] */
+    const float *rope_sin;              /* [rope_max_tokens,C/(2H)] */
+    uint32_t rope_max_tokens;
     float breath_scale;
     float voicing_scale;
     float tension_scale;
@@ -92,7 +100,12 @@ enum {
     DSASM_FS2_FEAT_SPEED      = 1u<<5,
     DSASM_FS2_FEAT_SPEAKER    = 1u<<6,
     DSASM_FS2_FEAT_STRETCH_TABLE = 1u<<7,
-    DSASM_FS2_FEAT_LANGUAGE_MASK = 1u<<8
+    DSASM_FS2_FEAT_LANGUAGE_MASK = 1u<<8,
+    DSASM_FS2_FEAT_NO_STRETCH = 1u<<9,
+    DSASM_FS2_FEAT_FROZEN_SPEAKER = 1u<<10,
+    DSASM_FS2_FEAT_EXACT_ROPE = 1u<<11,
+    DSASM_FS2_FEAT_RAW_DURATION = 1u<<12,
+    DSASM_FS2_FEAT_ADAPTIVE_LN = 1u<<13
 };
 
 typedef struct {

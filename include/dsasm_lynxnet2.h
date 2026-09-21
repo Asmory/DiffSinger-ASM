@@ -12,6 +12,7 @@ extern "C" {
 enum {
     DSASM_GLU_ATAN = 1,
     DSASM_GLU_SOFTSIGN = 2,
+    DSASM_GLU_SILU = 3,
 };
 
 typedef struct {
@@ -19,9 +20,9 @@ typedef struct {
     const float *ln_beta;                  /* [C] */
     const float *dw_weight_tap_major;      /* [31,C] */
     const float *dw_bias;                  /* [C] */
-    const float *glu1_weight;              /* ATAN: packed16 [2H,C], SOFTSIGN: packed M4N8 */
+    const float *glu1_weight;              /* ATAN/SILU: packed16 [2H,C], SOFTSIGN: packed M4N8 */
     const float *glu1_bias;                /* [2H], left then gate */
-    const float *glu2_weight;              /* ATAN: packed16 [2H,H], SOFTSIGN: packed M4N8 */
+    const float *glu2_weight;              /* ATAN/SILU: packed16 [2H,H], SOFTSIGN: packed M4N8 */
     const float *glu2_bias;                /* [2H], left then gate */
     const float *out_weight_m4n16;         /* packed16 [C,H] */
     const float *out_bias;                 /* [C] */

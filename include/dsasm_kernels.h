@@ -2,6 +2,7 @@
 #define DSASM_KERNELS_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -107,6 +108,8 @@ void ds_depthwise_conv1d_k31_prelu_f32_avx2(
 /* M7 official-LYNXNet2 support. */
 void ds_atan_glu_f32_avx2(
     const float *x_left_gate, float *y, size_t M, size_t N);
+void ds_silu_glu_f32_avx2(
+    const float *x_left_gate, float *y, size_t M, size_t N);
 void ds_atan_glu_f32_avx2_ystrided(
     const float *x_left_gate, float *y, size_t M, size_t N, size_t y_stride);
 float ds_dot_f32_avx2_fma(const float *a, const float *b, size_t n);
@@ -127,6 +130,14 @@ void ds_convtranspose1d_s8k16_oc_f32_avx2(
 
 void ds_leaky_relu_f32_avx2(const float *x, float *y, size_t n, float alpha);
 void ds_add_f32_avx2(const float *a, const float *b, float *y, size_t n);
+void ds_rope_f32_avx2(float *x, const float *cosv, const float *sinv,
+                      size_t head_dim, uint32_t interleaved);
+void ds_adaptive_affine_f32_avx2(float *normalized_tc,
+                                 const float *shift_scale_tc,
+                                 size_t rows, size_t channels);
+void ds_phoneme_mean_f32_avx2(const float *frame_tc,
+                              const int32_t *durations, float *phoneme_pc,
+                              size_t phonemes, size_t channels);
 
 void ds_conv1d_nct_f32_avx2_oc4_t8(
     const float *x_padded, const float *w_packed4, const float *bias, float *y,

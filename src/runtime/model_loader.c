@@ -46,7 +46,7 @@ static int load_fs2(DSAsmAcousticModel *m,const char *path){
     const int is25=memcmp(b,"DSFS25\0\0",8)==0;
     const int is21=memcmp(b,"DSFS21\0\0",8)==0;
     if(!is25&&!is21)return -10;
-    uint32_t ver=0,V=0,C=0,L=0,H=0,K=0,inter=0,nlang=0,flags=0;float theta=0.0f;
+    uint32_t ver=0,V=0,C=0,L=0,H=0,K=0,inter=0,nlang=0,flags=0,rope_max=0;float theta=0.0f;
     float breath_scale=1.0f,voicing_scale=1.0f,tension_scale=1.0f;
     if(is21){
         uint32_t h[7];memcpy(h,b+8,sizeof(h));memcpy(&theta,b+8+sizeof(h),sizeof(theta));
@@ -56,6 +56,7 @@ static int load_fs2(DSAsmAcousticModel *m,const char *path){
         uint32_t h[9];float f[4];memcpy(h,b+8,sizeof(h));memcpy(f,b+8+sizeof(h),sizeof(f));
         ver=h[0];V=h[1];C=h[2];L=h[3];H=h[4];K=h[5];inter=h[6];nlang=h[7];flags=h[8];
         theta=f[0];breath_scale=f[1];voicing_scale=f[2];tension_scale=f[3];
+        memcpy(&rope_max,b+60,sizeof(rope_max));
         if(ver!=1)return -11;
     }
     if(!V||!C||!L||!H||K!=3||C%16u||C%H)return -11;
@@ -68,10 +69,21 @@ static int load_fs2(DSAsmAcousticModel *m,const char *path){
     w->encoder.ffn_kernel_size=K;w->encoder.rope_interleaved=inter;w->encoder.rope_theta=theta;w->encoder.layers=ls;
 #define TAKE(dst,count) do{ if(take_f32(b,n,&off,(count),&(dst))!=0)return -13; }while(0)
     TAKE(w->encoder.token_embedding,(size_t)V*C);TAKE(w->encoder.dur_weight,C);TAKE(w->encoder.dur_bias,C);
+    const float *adaptive_mask=NULL;
+    if(is25&&(flags&DSASM_FS2_FEAT_ADAPTIVE_LN))TAKE(adaptive_mask,(size_t)2u*L);
     for(uint32_t i=0;i<L;i++){
         DSAsmFS2EncoderLayer*q=&ls[i];
-        TAKE(q->ln1_gamma,C);TAKE(q->ln1_beta,C);TAKE(q->qkv_weight_m4n16,(size_t)3*C*C);TAKE(q->qkv_bias,3u*C);
+        int a1=0,a2=0;
+        if(adaptive_mask){
+            if((adaptive_mask[2u*i]!=0.0f&&adaptive_mask[2u*i]!=1.0f)||
+               (adaptive_mask[2u*i+1u]!=0.0f&&adaptive_mask[2u*i+1u]!=1.0f))return -11;
+            a1=adaptive_mask[2u*i]!=0.0f;a2=adaptive_mask[2u*i+1u]!=0.0f;
+        }
+        TAKE(q->ln1_gamma,C);TAKE(q->ln1_beta,C);
+        if(a1){TAKE(q->ln1_affine_weight_m4n16,(size_t)2*C*C);TAKE(q->ln1_affine_bias,2u*C);}
+        TAKE(q->qkv_weight_m4n16,(size_t)3*C*C);TAKE(q->qkv_bias,3u*C);
         TAKE(q->out_weight_m4n16,(size_t)C*C);TAKE(q->out_bias,C);TAKE(q->ln2_gamma,C);TAKE(q->ln2_beta,C);
+        if(a2){TAKE(q->ln2_affine_weight_m4n16,(size_t)2*C*C);TAKE(q->ln2_affine_bias,2u*C);}
         TAKE(q->ffn1_weight_m4n16,(size_t)12*C*C);TAKE(q->ffn1_bias,4u*C);TAKE(q->ffn2_weight_m4n16,(size_t)4*C*C);TAKE(q->ffn2_bias,C);
     }
     TAKE(w->encoder.final_ln_gamma,C);TAKE(w->encoder.final_ln_beta,C);
@@ -91,6 +103,13 @@ static int load_fs2(DSAsmAcousticModel *m,const char *path){
         const float*fc=NULL;TAKE(fc,7u);
         x->gender_clip_min=fc[0];x->gender_clip_max=fc[1];x->gender_pre_scale=fc[2];x->key_shift_scale=fc[3];
         x->speed_clip_min=fc[4];x->speed_clip_max=fc[5];x->speed_scale=fc[6];
+        if(flags&DSASM_FS2_FEAT_FROZEN_SPEAKER)TAKE(x->frozen_speaker,C);
+        if(flags&DSASM_FS2_FEAT_EXACT_ROPE){
+            if(!rope_max)return -11;
+            x->rope_max_tokens=rope_max;
+            TAKE(x->rope_cos,(size_t)rope_max*(C/H)/2u);
+            TAKE(x->rope_sin,(size_t)rope_max*(C/H)/2u);
+        }
         if(flags&DSASM_FS2_FEAT_STRETCH_TABLE)TAKE(x->stretch_table,(size_t)1001u*C);
     }
 #undef TAKE
@@ -126,7 +145,8 @@ static int load_rf(DSAsmAcousticModel *m,const char *path){
     if(n<64||memcmp(b,"DSLYNX7\0",8)!=0)return -30;
     uint32_t h[12];memcpy(h,b+8,sizeof(h));
     uint32_t ver=h[0],I=h[1],Q=h[2],C=h[3],H=h[4],L=h[5],K=h[6],glu=h[7];
-    if(ver!=1||!I||!Q||!C||!H||!L||K!=31||C%16u||I%16u||H%8u||(glu!=DSASM_GLU_ATAN&&glu!=DSASM_GLU_SOFTSIGN))return -31;
+    if(ver!=1||!I||!Q||!C||!H||!L||K!=31||C%16u||I%16u||H%8u||
+       (glu!=DSASM_GLU_ATAN&&glu!=DSASM_GLU_SOFTSIGN&&glu!=DSASM_GLU_SILU))return -31;
     DSAsmLynxNet2Block*bs=(DSAsmLynxNet2Block*)calloc(L,sizeof(*bs));if(!bs)return -32;
     m->rf_blocks_owned=bs;
     DSAsmLynxNet2Weights*w=&m->rf;w->input_dim=I;w->condition_dim=Q;w->channels=C;w->hidden_dim=H;w->num_layers=L;w->kernel_size=K;w->glu_type=glu;w->blocks=bs;

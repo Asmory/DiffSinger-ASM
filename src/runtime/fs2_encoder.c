@@ -31,6 +31,8 @@ static int valid(const DSAsmFS2EncoderWeights *w){
         if(!q->ln1_gamma||!q->ln1_beta||!q->qkv_weight_m4n16||!q->qkv_bias||
            !q->out_weight_m4n16||!q->out_bias||!q->ln2_gamma||!q->ln2_beta||
            !q->ffn1_weight_m4n16||!q->ffn1_bias||!q->ffn2_weight_m4n16||!q->ffn2_bias)return 0;
+        if((q->ln1_affine_weight_m4n16==NULL)!=(q->ln1_affine_bias==NULL) ||
+           (q->ln2_affine_weight_m4n16==NULL)!=(q->ln2_affine_bias==NULL))return 0;
     }
     return C>0;
 }
@@ -39,7 +41,9 @@ size_t ds_fs2_encoder_workspace_floats(const DSAsmFS2EncoderWeights *w,size_t T)
     if(!valid(w)||!T)return 0;
     const size_t C=w->hidden_size,hd=C/w->num_heads,half=hd/2u;
     /* x,tmp,norm,qkv,attn,im2,ffn,rope cos+sin,scores */
-    return T*C*3u + T*(3u*C) + T*C + T*(3u*C) + T*(4u*C) + 2u*T*half + T;
+    int adaptive=0;
+    for(size_t i=0;i<w->num_layers;i++)adaptive|=w->layers[i].ln1_affine_weight_m4n16!=NULL||w->layers[i].ln2_affine_weight_m4n16!=NULL;
+    return T*C*3u + T*(3u*C) + T*C + T*(3u*C) + T*(4u*C) + 2u*T*half + T + (adaptive?T*(2u*C):0u);
 }
 
 static void p_linear(DSAsmThreadPool *p,const float*x,const float*w,const float*b,float*y,
@@ -100,32 +104,14 @@ static void build_rope(float*cosv,float*sinv,size_t T,size_t hd,float theta){
     }
 }
 
-static void rope_one(float*x,const float*c,const float*s,size_t hd,int interleaved){
-    if(interleaved){
-        for(size_t j=0;j<hd/2u;j++){
-            const size_t i=2u*j;
-            const float x1=x[i],x2=x[i+1],co=c[j],si=s[j];
-            x[i]=x1*co-x2*si;
-            x[i+1]=x2*co+x1*si;
-        }
-    }else{
-        const size_t half=hd/2u;
-        for(size_t j=0;j<half;j++){
-            const float x1=x[j],x2=x[j+half],co=c[j],si=s[j];
-            x[j]=x1*co-x2*si;
-            x[j+half]=x2*co+x1*si;
-        }
-    }
-}
-
 static void apply_rope(float*qkv,const float*cosv,const float*sinv,size_t T,size_t C,size_t H,int interleaved){
     const size_t hd=C/H,half=hd/2u;
     for(size_t t=0;t<T;t++){
         float*row=qkv+t*(3u*C);
         for(size_t h=0;h<H;h++){
             const float*c=cosv+t*half,*s=sinv+t*half;
-            rope_one(row+h*hd,c,s,hd,interleaved);
-            rope_one(row+C+h*hd,c,s,hd,interleaved);
+            ds_rope_f32_avx2(row+h*hd,c,s,hd,(uint32_t)interleaved);
+            ds_rope_f32_avx2(row+C+h*hd,c,s,hd,(uint32_t)interleaved);
         }
     }
 }
@@ -178,6 +164,8 @@ static void attention(const float*qkv,const int32_t*tok,float*out,float*scores,
 static int encoder_forward_impl(
     const DSAsmFS2EncoderWeights *w,const int32_t*tok,const int32_t*dur,size_t T,
     const int32_t*lang,const float*lang_emb,size_t nlang,const float*lang_token_mask,
+    const float*exact_rope_cos,const float*exact_rope_sin,size_t exact_rope_tokens,
+    int raw_duration,const float*adaptive_condition_tc,
     float*out,float*ws,DSAsmThreadPool*pool){
     if(!valid(w)||!tok||!dur||!out||!ws||!T)return -1;
     const size_t C=w->hidden_size,H=w->num_heads,hd=C/H,half=hd/2u,F4=4u*C;
@@ -197,6 +185,10 @@ static int encoder_forward_impl(
     float*cosv=ws; ws+=T*half;
     float*sinv=ws; ws+=T*half;
     float*scores=ws;
+    int has_adaptive=0;
+    for(size_t li=0;li<w->num_layers;li++)has_adaptive|=w->layers[li].ln1_affine_weight_m4n16!=NULL||w->layers[li].ln2_affine_weight_m4n16!=NULL;
+    float*adaptive=has_adaptive?(scores+T):NULL;
+    if(has_adaptive&&!adaptive_condition_tc)return -6;
 
     const float emb_scale=sqrtf((float)C);
     for(size_t t=0;t<T;t++){
@@ -206,14 +198,21 @@ static int encoder_forward_impl(
         size_t lid=(lang&&lang_emb)?(size_t)lang[t]:0u;
         if(lang_token_mask && (size_t)tok[t] < w->vocab_size && lang_token_mask[tok[t]] < 0.5f) lid=0u;
         const float*le=(lang&&lang_emb)?lang_emb+lid*C:NULL;
-        const float di=log1pf((float)dur[t]);
+        const float di=raw_duration?(float)dur[t]:log1pf((float)dur[t]);
         for(size_t c=0;c<C;c++)dst[c]=emb_scale*e[c] + di*w->dur_weight[c] + w->dur_bias[c] + (le?le[c]:0.0f);
     }
-    build_rope(cosv,sinv,T,hd,w->rope_theta);
+    if(exact_rope_cos||exact_rope_sin){
+        if(!exact_rope_cos||!exact_rope_sin||T>exact_rope_tokens)return -5;
+        cosv=(float*)exact_rope_cos;sinv=(float*)exact_rope_sin;
+    }else build_rope(cosv,sinv,T,hd,w->rope_theta);
 
     for(size_t li=0;li<w->num_layers;li++){
         const DSAsmFS2EncoderLayer*q=&w->layers[li];
         fs2_layernorm(x,q->ln1_gamma,q->ln1_beta,norm,T,C,1e-5f);
+        if(q->ln1_affine_weight_m4n16){
+            p_linear(pool,adaptive_condition_tc,q->ln1_affine_weight_m4n16,q->ln1_affine_bias,adaptive,T,2u*C,C);
+            ds_adaptive_affine_f32_avx2(norm,adaptive,T,C);
+        }
         p_linear(pool,norm,q->qkv_weight_m4n16,q->qkv_bias,qkv,T,3u*C,C);
         apply_rope(qkv,cosv,sinv,T,C,H,(int)w->rope_interleaved);
         attention(qkv,tok,attn,scores,T,C,H);
@@ -221,6 +220,10 @@ static int encoder_forward_impl(
         add_residual_mask(x,tmp,x,tok,T,C);
 
         fs2_layernorm(x,q->ln2_gamma,q->ln2_beta,norm,T,C,1e-5f);
+        if(q->ln2_affine_weight_m4n16){
+            p_linear(pool,adaptive_condition_tc,q->ln2_affine_weight_m4n16,q->ln2_affine_bias,adaptive,T,2u*C,C);
+            ds_adaptive_affine_f32_avx2(norm,adaptive,T,C);
+        }
         im2col3(norm,im2,T,C);
         p_linear(pool,im2,q->ffn1_weight_m4n16,q->ffn1_bias,ffn,T,F4,3u*C);
         gelu_exact_scaled(ffn,T*F4,0.5773502691896257645f);
@@ -235,7 +238,7 @@ static int encoder_forward_impl(
 int ds_fs2_encoder_forward_f32_avx2(
     const DSAsmFS2EncoderWeights *w,const int32_t*tok,const int32_t*dur,size_t T,
     float*out,float*ws,DSAsmThreadPool*pool){
-    return encoder_forward_impl(w,tok,dur,T,NULL,NULL,0,NULL,out,ws,pool);
+    return encoder_forward_impl(w,tok,dur,T,NULL,NULL,0,NULL,NULL,NULL,0,0,NULL,out,ws,pool);
 }
 
 static int valid_acoustic(const DSAsmFS2AcousticWeights*w){
@@ -248,7 +251,7 @@ static int valid_acoustic(const DSAsmFS2AcousticWeights*w){
 size_t ds_fs2_acoustic_condition_workspace_floats(const DSAsmFS2AcousticWeights*w,size_t P,size_t T){
     if(!valid_acoustic(w)||!P||!T)return 0;
     const size_t C=w->encoder.hidden_size;
-    return P + ds_fs2_encoder_workspace_floats(&w->encoder,P) + P*C + T + T*C + T*(4u*C) + T*C + T*(3u*C) + 4u*C;
+    return P + ds_fs2_encoder_workspace_floats(&w->encoder,P) + 2u*P*C + T + T*C + T*(4u*C) + T*C + T*(3u*C) + 4u*C;
 }
 
 static void stretch_values(const int32_t*m,size_t T,const int32_t*d,size_t P,float*out){
@@ -311,6 +314,7 @@ int ds_fs2_acoustic_condition_f32_avx2(
     size_t encn=ds_fs2_encoder_workspace_floats(&w->encoder,P);
     float*encws=ws;ws+=encn;
     float*enc=ws;ws+=P*C;
+    ws+=P*C;
     float*stretch=ws;ws+=T;
     float*semb=ws;ws+=T*C;
     float*h4=ws;ws+=T*F4;
@@ -359,6 +363,12 @@ static int valid_deploy_extras(const DSAsmFS2AcousticWeights*w,const DSAsmFS2Dep
     if((f&DSASM_FS2_FEAT_KEY_SHIFT) && (!x->key_shift_weight||!x->key_shift_bias))return 0;
     if((f&DSASM_FS2_FEAT_SPEED) && (!x->speed_weight||!x->speed_bias))return 0;
     if((f&DSASM_FS2_FEAT_STRETCH_TABLE) && !x->stretch_table)return 0;
+    if((f&DSASM_FS2_FEAT_FROZEN_SPEAKER) && !x->frozen_speaker)return 0;
+    if((f&DSASM_FS2_FEAT_EXACT_ROPE) && (!x->rope_cos||!x->rope_sin||!x->rope_max_tokens))return 0;
+    if(f&DSASM_FS2_FEAT_ADAPTIVE_LN){
+        int found=0;for(size_t i=0;i<w->encoder.num_layers;i++)found|=w->encoder.layers[i].ln1_affine_weight_m4n16!=NULL||w->encoder.layers[i].ln2_affine_weight_m4n16!=NULL;
+        if(!found||!(f&(DSASM_FS2_FEAT_SPEAKER|DSASM_FS2_FEAT_FROZEN_SPEAKER)))return 0;
+    }
     (void)w;return 1;
 }
 
@@ -381,6 +391,7 @@ static int ds_fs2_acoustic_condition_deploy_impl_f32_avx2(
     size_t encn=ds_fs2_encoder_workspace_floats(&w->encoder,P);
     float*encws=ws;ws+=encn;
     float*enc=ws;ws+=P*C;
+    float*adaptive_pc=ws;ws+=P*C;
     float*stretch=ws;ws+=T;
     float*semb=ws;ws+=T*C;
     float*h4=ws;ws+=T*F4;
@@ -392,7 +403,21 @@ static int ds_fs2_acoustic_condition_deploy_impl_f32_avx2(
     const float*langemb=(flags&DSASM_FS2_FEAT_LANGUAGE)?x->language_embedding:NULL;
     size_t nlang=(flags&DSASM_FS2_FEAT_LANGUAGE)?x->num_languages:0;
     const float*langmask=((flags&DSASM_FS2_FEAT_LANGUAGE_MASK)&&x)?x->language_token_mask:NULL;
-    int rc=encoder_forward_impl(&w->encoder,tok,dur,P,langs,langemb,nlang,langmask,enc,encws,pool);
+    const float*rope_cos=(flags&DSASM_FS2_FEAT_EXACT_ROPE)?x->rope_cos:NULL;
+    const float*rope_sin=(flags&DSASM_FS2_FEAT_EXACT_ROPE)?x->rope_sin:NULL;
+    const size_t rope_tokens=(flags&DSASM_FS2_FEAT_EXACT_ROPE)?x->rope_max_tokens:0u;
+    const float*adaptive_condition=NULL;
+    if(flags&DSASM_FS2_FEAT_ADAPTIVE_LN){
+        if(flags&DSASM_FS2_FEAT_SPEAKER){
+            ds_phoneme_mean_f32_avx2(in->speaker_embedding_tc,dur,adaptive_pc,P,C);
+        }else{
+            for(size_t p=0;p<P;p++)memcpy(adaptive_pc+p*C,x->frozen_speaker,C*sizeof(float));
+        }
+        adaptive_condition=adaptive_pc;
+    }
+    int rc=encoder_forward_impl(&w->encoder,tok,dur,P,langs,langemb,nlang,langmask,
+                                rope_cos,rope_sin,rope_tokens,
+                                !!(flags&DSASM_FS2_FEAT_RAW_DURATION),adaptive_condition,enc,encws,pool);
     if(rc)return rc;
     if(dbg)dbg_copy(dbg->encoder_txt_pc,enc,P*C);
     for(size_t t=0;t<T;t++){
@@ -401,24 +426,28 @@ static int ds_fs2_acoustic_condition_deploy_impl_f32_avx2(
         else memcpy(dst,enc+(size_t)(q-1)*C,C*sizeof(float));
     }
     if(dbg)dbg_copy(dbg->gathered_tc,cond,T*C);
-    stretch_values(mel2ph,T,dur,P,stretch);
-    if((flags&DSASM_FS2_FEAT_STRETCH_TABLE) && x->stretch_table){
-        for(size_t t=0;t<T;t++){
-            long qi=lrintf(1000.0f*stretch[t]);
-            if(qi<0)qi=0;else if(qi>1000)qi=1000;
-            memcpy(tmp+t*C,x->stretch_table+(size_t)qi*C,C*sizeof(float));
-        }
+    if(flags&DSASM_FS2_FEAT_NO_STRETCH){
+        if(dbg){dbg_copy(dbg->stretch_tc,cond,T*C);dbg_copy(dbg->gru_tc,cond,T*C);}
     }else{
-        stretch_sinusoidal(stretch,semb,T,C);
-        p_linear(pool,semb,w->stretch_w1_m4n16,w->stretch_b1,h4,T,F4,C);
-        gelu_exact_scaled(h4,T*F4,1.0f);
-        p_linear(pool,h4,w->stretch_w2_m4n16,w->stretch_b2,tmp,T,C,F4);
+        stretch_values(mel2ph,T,dur,P,stretch);
+        if((flags&DSASM_FS2_FEAT_STRETCH_TABLE) && x->stretch_table){
+            for(size_t t=0;t<T;t++){
+                long qi=lrintf(1000.0f*stretch[t]);
+                if(qi<0)qi=0;else if(qi>1000)qi=1000;
+                memcpy(tmp+t*C,x->stretch_table+(size_t)qi*C,C*sizeof(float));
+            }
+        }else{
+            stretch_sinusoidal(stretch,semb,T,C);
+            p_linear(pool,semb,w->stretch_w1_m4n16,w->stretch_b1,h4,T,F4,C);
+            gelu_exact_scaled(h4,T*F4,1.0f);
+            p_linear(pool,h4,w->stretch_w2_m4n16,w->stretch_b2,tmp,T,C,F4);
+        }
+        for(size_t i=0;i<T*C;i++)cond[i]+=tmp[i];
+        if(dbg)dbg_copy(dbg->stretch_tc,cond,T*C);
+        gru_forward(w,cond,tmp,gru_proj,gru_tmp,T);
+        for(size_t i=0;i<T*C;i++)cond[i]+=tmp[i];
+        if(dbg)dbg_copy(dbg->gru_tc,cond,T*C);
     }
-    for(size_t i=0;i<T*C;i++)cond[i]+=tmp[i];
-    if(dbg)dbg_copy(dbg->stretch_tc,cond,T*C);
-    gru_forward(w,cond,tmp,gru_proj,gru_tmp,T);
-    for(size_t i=0;i<T*C;i++)cond[i]+=tmp[i];
-    if(dbg)dbg_copy(dbg->gru_tc,cond,T*C);
 
     for(size_t t=0;t<T;t++){
         float*dst=cond+t*C;
@@ -464,13 +493,10 @@ static int ds_fs2_acoustic_condition_deploy_impl_f32_avx2(
     }
     if(dbg)dbg_copy(dbg->speed_tc,cond,T*C);
 
-    for(size_t t=0;t<T;t++){
-        float*dst=cond+t*C;
-        if(flags&DSASM_FS2_FEAT_SPEAKER){
-            const float*sp=in->speaker_embedding_tc+t*C;
-            for(size_t c=0;c<C;c++)dst[c]+=sp[c];
-        }
-    }
+    if(flags&DSASM_FS2_FEAT_FROZEN_SPEAKER)
+        for(size_t t=0;t<T;t++)ds_add_f32_avx2(cond+t*C,x->frozen_speaker,cond+t*C,C);
+    if(flags&DSASM_FS2_FEAT_SPEAKER)
+        ds_add_f32_avx2(cond,in->speaker_embedding_tc,cond,T*C);
     if(dbg)dbg_copy(dbg->speaker_tc,cond,T*C);
     return 0;
 }

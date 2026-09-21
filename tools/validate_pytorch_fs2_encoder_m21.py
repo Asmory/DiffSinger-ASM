@@ -22,7 +22,9 @@ def conv3_flat(w):
 class Layer(C.Structure):
     _fields_=[('ln1_gamma',PF),('ln1_beta',PF),('qkv_weight_m4n16',PF),('qkv_bias',PF),
               ('out_weight_m4n16',PF),('out_bias',PF),('ln2_gamma',PF),('ln2_beta',PF),
-              ('ffn1_weight_m4n16',PF),('ffn1_bias',PF),('ffn2_weight_m4n16',PF),('ffn2_bias',PF)]
+              ('ffn1_weight_m4n16',PF),('ffn1_bias',PF),('ffn2_weight_m4n16',PF),('ffn2_bias',PF),
+              ('ln1_affine_weight_m4n16',PF),('ln1_affine_bias',PF),
+              ('ln2_affine_weight_m4n16',PF),('ln2_affine_bias',PF)]
 class Weights(C.Structure):
     _fields_=[('vocab_size',C.c_uint32),('hidden_size',C.c_uint32),('num_layers',C.c_uint32),
               ('num_heads',C.c_uint32),('ffn_kernel_size',C.c_uint32),('rope_interleaved',C.c_uint32),

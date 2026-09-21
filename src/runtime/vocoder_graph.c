@@ -173,7 +173,14 @@ static int vnni_extra_op_allowed(const DSAsmVocoderGraph *g,const DSV35Op *op){
         return wanted==79u||wanted==77u||wanted==80u||
                wanted==76u||wanted==74u||wanted==73u||
                wanted==48u||wanted==49u||wanted==51u||
-               wanted==52u||wanted==54u||wanted==55u;
+               wanted==52u||wanted==54u||wanted==55u||
+               wanted==38u||wanted==39u||wanted==41u||
+               wanted==42u||wanted==44u||wanted==45u||
+               wanted==106u||wanted==107u||wanted==109u||
+               wanted==110u||wanted==112u||wanted==113u||
+               wanted==140u||wanted==142u||wanted==143u||
+               wanted==145u||wanted==146u||wanted==149u||
+               wanted==150u||wanted==152u||wanted==153u||wanted==156u;
     }
     if(!*configured||!strcmp(configured,"off"))return 0;
     const char *p=configured;

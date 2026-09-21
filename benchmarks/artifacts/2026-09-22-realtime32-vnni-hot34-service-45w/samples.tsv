@@ -1,0 +1,7 @@
+# variant	cpu_rtf	worst_rtf	deadline_misses
+baseline	4.021975	1.275864	17
+candidate	2.957324	0.947715	0
+baseline	3.291170	0.973321	0
+candidate	2.837905	0.916095	0
+baseline	3.369964	0.963818	0
+candidate	2.874861	0.921636	0

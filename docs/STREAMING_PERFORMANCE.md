@@ -83,28 +83,30 @@ establishes a new streaming baseline and is not compared with M55/M58.
 
 ## Current 32-frame champion
 
-The accepted pre-service champion for the 45 W package-power context uses
-twelve additional quality-gated VNNI operators
-(`79,77,80,76,74,73,48,49,51,52,54,55`) and six workers. The last six are the
-profiled `Cin256/K11` group. Three uninstrumented interleaved pairs measured:
+The accepted service champion for the 45 W package-power context uses 34
+quality-gated VNNI operators and six workers. Starting from the hot-twelve
+champion, profiling admitted the `Cin256/K7` and `Cin64/K7` groups, then a
+per-op quality probe selected 10 of the 12 `Cin32/K7/K11` operators. Ops 139
+and 155 remain FP32 because the complete Cin32 group failed the cosine gate.
+Three uninstrumented interleaved pairs measured:
 
 ```text
-reproduced hot-six: 1.352409  1.007939  0.992979  max=1.352409
-hot-twelve:        0.977545  1.001437  0.984307  max=1.001437
+reproduced hot-twelve: 1.275864  0.973321  0.963818  max=1.275864
+hot-thirty-four:       0.947715  0.916095  0.921636  max=0.947715
 ```
 
-The paired reduction is 25.95%. More conservatively, the candidate improves
-16.77% over the archived hot-six champion maximum of 1.203178. The maximum
-deadline-miss count is 1 versus 18 for the paired control and 9 for the archived
-champion. Exact-request ONNX-vocoder parity passes at cosine 0.999465810 and SNR
-29.71 dB. The candidate remains in the pre-service phase because one run is
-slightly above RTF 1; CPU-RTF is diagnostic until every run crosses the target.
+The candidate improves 5.37% over the archived hot-twelve champion maximum of
+1.001437. Every candidate run has worst RTF below 1 and zero deadline misses.
+Exact-request ONNX-vocoder parity passes at cosine 0.999291538 and SNR 28.49 dB.
+The real-time objective therefore switches to the CPU-load staircase: the new
+worst CPU-RTF champion is 2.957324, and future candidates must reduce that by at
+least 5% while preserving worst RTF below 1 and zero misses in every run.
 
 This context is distinct from the historical 28 W measurements. Its fingerprint
 includes PL1=45 W, a 55.967744 s PL1 window, the performance platform profile,
 intel_pstate EPP=performance, six workers, 10 warm-up regions, and 25 measured
 regions. Raw evidence and hashes are stored under
-`benchmarks/artifacts/2026-09-22-realtime32-vnni-hot12-45w/`. The predecessor
+`benchmarks/artifacts/2026-09-22-realtime32-vnni-hot34-service-45w/`. The predecessor
 artifact remains preserved under its own tag and directory.
 
 The exact-request waveform golden must match the acoustic implementation used

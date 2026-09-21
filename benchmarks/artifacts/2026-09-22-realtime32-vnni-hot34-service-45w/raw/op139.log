@@ -1,0 +1,3 @@
+DSASM PURE-ASM vocoder: frames=32 samples=16384 workers=6 median=42.391 ms audio=371.519 ms RTF=0.114 speed=8.764x
+  parity max_abs=0.214775831 rmse=0.0290525335 cosine=0.999087274 SNR=27.39 dB gate=(cos>=0,SNR>=0.00)
+DSASM parity: OK

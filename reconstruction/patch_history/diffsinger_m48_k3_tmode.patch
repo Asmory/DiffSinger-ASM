@@ -1,0 +1,418 @@
+diff --git a/include/dsasm_kernels.h b/include/dsasm_kernels.h
+index cb6276b..d407061 100644
+--- a/include/dsasm_kernels.h
++++ b/include/dsasm_kernels.h
+@@ -144,6 +144,10 @@ void ds_conv1d_nct_f32_avx2_oc8_t8_range(
+ 
+ /* M39 fixed-kernel-size HiFi-GAN Conv1d. These entry points are selected only
+    for 8-aligned real vocoder shapes and preserve the generic accumulation order. */
++void ds_conv1d_nct_f32_avx2_oc4_t16_k3(
++    const float*,const float*,const float*,float*,size_t,size_t,size_t,size_t,size_t,size_t);
++void ds_conv1d_nct_f32_avx2_oc4_t24_k3(
++    const float*,const float*,const float*,float*,size_t,size_t,size_t,size_t,size_t,size_t);
+ void ds_conv1d_nct_f32_avx2_oc8_t8_k3(
+     const float*,const float*,const float*,float*,size_t,size_t,size_t,size_t,size_t,size_t);
+ void ds_conv1d_nct_f32_avx2_oc8_t8_k7(
+diff --git a/src/kernels/x86_64/conv1d_nct_f32_avx2_oc8_t8_kspec.S b/src/kernels/x86_64/conv1d_nct_f32_avx2_oc8_t8_kspec.S
+index 9e7fea0..2d82448 100644
+--- a/src/kernels/x86_64/conv1d_nct_f32_avx2_oc8_t8_kspec.S
++++ b/src/kernels/x86_64/conv1d_nct_f32_avx2_oc8_t8_kspec.S
+@@ -1925,3 +1925,283 @@ ds_conv1d_nct_f32_avx2_oc4_t24_range_k11:
+ .size ds_conv1d_nct_f32_avx2_oc4_t24_range_k11,.-ds_conv1d_nct_f32_avx2_oc4_t24_range_k11
+ 
+ .section .note.GNU-stack,"",@progbits
++.text
++
++# M48 perf-guided K=3 kernels. Compare oc4 x t16 vs oc4 x t24.
++# Both preserve packed8 weights and per-output accumulation order.
++.macro M48_K3_T16_STEP
++    vmovups ymm8, YMMWORD PTR [rdi]
++    vmovups ymm9, YMMWORD PTR [rdi+32]
++
++    vbroadcastss ymm10, DWORD PTR [rax+0]
++    vfmadd231ps ymm0, ymm8, ymm10
++    vfmadd231ps ymm1, ymm9, ymm10
++    vbroadcastss ymm10, DWORD PTR [rax+4]
++    vfmadd231ps ymm2, ymm8, ymm10
++    vfmadd231ps ymm3, ymm9, ymm10
++    vbroadcastss ymm10, DWORD PTR [rax+8]
++    vfmadd231ps ymm4, ymm8, ymm10
++    vfmadd231ps ymm5, ymm9, ymm10
++    vbroadcastss ymm10, DWORD PTR [rax+12]
++    vfmadd231ps ymm6, ymm8, ymm10
++    vfmadd231ps ymm7, ymm9, ymm10
++
++    add rdi, r15
++    add rax, 32
++.endm
++
++.globl ds_conv1d_nct_f32_avx2_oc4_t16_k3
++.type ds_conv1d_nct_f32_avx2_oc4_t16_k3,@function
++ds_conv1d_nct_f32_avx2_oc4_t16_k3:
++    push rbp
++    mov rbp, rsp
++    push rbx
++    push r12
++    push r13
++    push r14
++    push r15
++    sub rsp, 24
++
++    test r8, r8
++    jz .m48_done_3_t16
++    test r9, r9
++    jz .m48_done_3_t16
++    test r9, 7
++    jnz .m48_done_3_t16
++
++    mov r12, r8
++    mov r13, QWORD PTR [rbp+24]       # Tout
++    mov r14, QWORD PTR [rbp+32]       # Tp
++    shl r14, 2
++    mov r15, QWORD PTR [rbp+40]       # dilation
++    shl r15, 2
++    mov QWORD PTR [rsp+0], rdi
++    mov rax, r12
++    imul rax, 96                      # Cin * 3 * 8 * sizeof(float)
++    mov QWORD PTR [rsp+8], rax
++    mov rbx, r9
++    shr rbx, 3
++
++.m48_ob_3_t16:
++    xor r8d, r8d
++.m48_half_3_t16:
++    mov rdi, r8
++    imul rdi, r13
++    add rdi, rcx
++    mov QWORD PTR [rsp+16], rdi
++    xor r10d, r10d
++.m48_t_3_t16:
++    cmp r10, r13
++    jae .m48_next_half_3_t16
++
++    lea rdi, [rdx+r8]
++    vbroadcastss ymm0, DWORD PTR [rdi+0]
++    vmovaps ymm1, ymm0
++    vbroadcastss ymm2, DWORD PTR [rdi+4]
++    vmovaps ymm3, ymm2
++    vbroadcastss ymm4, DWORD PTR [rdi+8]
++    vmovaps ymm5, ymm4
++    vbroadcastss ymm6, DWORD PTR [rdi+12]
++    vmovaps ymm7, ymm6
++
++    mov r11, QWORD PTR [rsp+0]
++    lea r11, [r11+r10*4]
++    mov rax, rsi
++    add rax, r8
++    mov r9, r12
++.m48_ci_3_t16:
++    mov rdi, r11
++    M48_K3_T16_STEP
++    M48_K3_T16_STEP
++    M48_K3_T16_STEP
++    add r11, r14
++    dec r9
++    jnz .m48_ci_3_t16
++
++    mov rdi, QWORD PTR [rsp+16]
++    lea rdi, [rdi+r10*4]
++    mov r11, r13
++    shl r11, 2
++    vmovups YMMWORD PTR [rdi+0], ymm0
++    vmovups YMMWORD PTR [rdi+32], ymm1
++    add rdi, r11
++    vmovups YMMWORD PTR [rdi+0], ymm2
++    vmovups YMMWORD PTR [rdi+32], ymm3
++    add rdi, r11
++    vmovups YMMWORD PTR [rdi+0], ymm4
++    vmovups YMMWORD PTR [rdi+32], ymm5
++    add rdi, r11
++    vmovups YMMWORD PTR [rdi+0], ymm6
++    vmovups YMMWORD PTR [rdi+32], ymm7
++
++    add r10, 16
++    jmp .m48_t_3_t16
++
++.m48_next_half_3_t16:
++    add r8, 16
++    cmp r8, 32
++    jb .m48_half_3_t16
++    add rsi, QWORD PTR [rsp+8]
++    add rdx, 32
++    mov rax, r13
++    shl rax, 5
++    add rcx, rax
++    dec rbx
++    jnz .m48_ob_3_t16
++
++.m48_done_3_t16:
++    vzeroupper
++    add rsp, 24
++    pop r15
++    pop r14
++    pop r13
++    pop r12
++    pop rbx
++    pop rbp
++    ret
++.size ds_conv1d_nct_f32_avx2_oc4_t16_k3,.-ds_conv1d_nct_f32_avx2_oc4_t16_k3
++
++.macro M48_K3_T24_STEP
++    vmovups ymm12, YMMWORD PTR [rdi]
++    vmovups ymm13, YMMWORD PTR [rdi+32]
++    vmovups ymm14, YMMWORD PTR [rdi+64]
++
++    vbroadcastss ymm15, DWORD PTR [rax+0]
++    vfmadd231ps ymm0, ymm12, ymm15
++    vfmadd231ps ymm1, ymm13, ymm15
++    vfmadd231ps ymm2, ymm14, ymm15
++    vbroadcastss ymm15, DWORD PTR [rax+4]
++    vfmadd231ps ymm3, ymm12, ymm15
++    vfmadd231ps ymm4, ymm13, ymm15
++    vfmadd231ps ymm5, ymm14, ymm15
++    vbroadcastss ymm15, DWORD PTR [rax+8]
++    vfmadd231ps ymm6, ymm12, ymm15
++    vfmadd231ps ymm7, ymm13, ymm15
++    vfmadd231ps ymm8, ymm14, ymm15
++    vbroadcastss ymm15, DWORD PTR [rax+12]
++    vfmadd231ps ymm9, ymm12, ymm15
++    vfmadd231ps ymm10, ymm13, ymm15
++    vfmadd231ps ymm11, ymm14, ymm15
++
++    add rdi, r15
++    add rax, 32
++.endm
++
++.globl ds_conv1d_nct_f32_avx2_oc4_t24_k3
++.type ds_conv1d_nct_f32_avx2_oc4_t24_k3,@function
++ds_conv1d_nct_f32_avx2_oc4_t24_k3:
++    push rbp
++    mov rbp, rsp
++    push rbx
++    push r12
++    push r13
++    push r14
++    push r15
++    sub rsp, 24
++
++    test r8, r8
++    jz .m48_done_3_t24
++    test r9, r9
++    jz .m48_done_3_t24
++    test r9, 7
++    jnz .m48_done_3_t24
++
++    mov r12, r8
++    mov r13, QWORD PTR [rbp+24]
++    mov r14, QWORD PTR [rbp+32]
++    shl r14, 2
++    mov r15, QWORD PTR [rbp+40]
++    shl r15, 2
++    mov QWORD PTR [rsp+0], rdi
++    mov rax, r12
++    imul rax, 96
++    mov QWORD PTR [rsp+8], rax
++    mov rbx, r9
++    shr rbx, 3
++
++.m48_ob_3_t24:
++    xor r8d, r8d
++.m48_half_3_t24:
++    mov rdi, r8
++    imul rdi, r13
++    add rdi, rcx
++    mov QWORD PTR [rsp+16], rdi
++    xor r10d, r10d
++.m48_t_3_t24:
++    cmp r10, r13
++    jae .m48_next_half_3_t24
++
++    lea rdi, [rdx+r8]
++    vbroadcastss ymm0, DWORD PTR [rdi+0]
++    vmovaps ymm1, ymm0
++    vmovaps ymm2, ymm0
++    vbroadcastss ymm3, DWORD PTR [rdi+4]
++    vmovaps ymm4, ymm3
++    vmovaps ymm5, ymm3
++    vbroadcastss ymm6, DWORD PTR [rdi+8]
++    vmovaps ymm7, ymm6
++    vmovaps ymm8, ymm6
++    vbroadcastss ymm9, DWORD PTR [rdi+12]
++    vmovaps ymm10, ymm9
++    vmovaps ymm11, ymm9
++
++    mov r11, QWORD PTR [rsp+0]
++    lea r11, [r11+r10*4]
++    mov rax, rsi
++    add rax, r8
++    mov r9, r12
++.m48_ci_3_t24:
++    mov rdi, r11
++    M48_K3_T24_STEP
++    M48_K3_T24_STEP
++    M48_K3_T24_STEP
++    add r11, r14
++    dec r9
++    jnz .m48_ci_3_t24
++
++    mov rdi, QWORD PTR [rsp+16]
++    lea rdi, [rdi+r10*4]
++    mov r11, r13
++    shl r11, 2
++    vmovups YMMWORD PTR [rdi+0], ymm0
++    vmovups YMMWORD PTR [rdi+32], ymm1
++    vmovups YMMWORD PTR [rdi+64], ymm2
++    add rdi, r11
++    vmovups YMMWORD PTR [rdi+0], ymm3
++    vmovups YMMWORD PTR [rdi+32], ymm4
++    vmovups YMMWORD PTR [rdi+64], ymm5
++    add rdi, r11
++    vmovups YMMWORD PTR [rdi+0], ymm6
++    vmovups YMMWORD PTR [rdi+32], ymm7
++    vmovups YMMWORD PTR [rdi+64], ymm8
++    add rdi, r11
++    vmovups YMMWORD PTR [rdi+0], ymm9
++    vmovups YMMWORD PTR [rdi+32], ymm10
++    vmovups YMMWORD PTR [rdi+64], ymm11
++
++    add r10, 24
++    jmp .m48_t_3_t24
++
++.m48_next_half_3_t24:
++    add r8, 16
++    cmp r8, 32
++    jb .m48_half_3_t24
++    add rsi, QWORD PTR [rsp+8]
++    add rdx, 32
++    mov rax, r13
++    shl rax, 5
++    add rcx, rax
++    dec rbx
++    jnz .m48_ob_3_t24
++
++.m48_done_3_t24:
++    vzeroupper
++    add rsp, 24
++    pop r15
++    pop r14
++    pop r13
++    pop r12
++    pop rbx
++    pop rbp
++    ret
++.size ds_conv1d_nct_f32_avx2_oc4_t24_k3,.-ds_conv1d_nct_f32_avx2_oc4_t24_k3
+diff --git a/src/runtime/threadpool.c b/src/runtime/threadpool.c
+index f8dee21..2df1b0e 100644
+--- a/src/runtime/threadpool.c
++++ b/src/runtime/threadpool.c
+@@ -189,11 +189,21 @@ static void run_m_slice(const DSAsmJob *j,size_t id,size_t nthreads){
+                     j->x, j->w+b0*block_floats, j->b0+c0, j->y+c0*j->M,
+                     j->K, ct, j->P, j->M, j->Q, j->R, j->residual+c0*j->M);
+                 else {
++                    const char *k3e=getenv("DSASM_K3_TMODE");
+                     const char *k7e=getenv("DSASM_K7_T24");
+                     const char *k11e=getenv("DSASM_K11_T24");
++                    const int k3mode=k3e?atoi(k3e):0;
+                     const int k7t24=(k7e && strcmp(k7e,"0")!=0);
+                     const int k11t24=(k11e && strcmp(k11e,"0")!=0);
+-                    if(k7t24 && (j->M%24u)==0 && j->P==7u)
++                    if(k3mode==24 && (j->M%24u)==0 && j->P==3u)
++                        ds_conv1d_nct_f32_avx2_oc4_t24_k3(
++                            j->x, j->w+b0*block_floats, j->b0+c0, j->y+c0*j->M,
++                            j->K, ct, j->P, j->M, j->Q, j->R);
++                    else if(k3mode==16 && (j->M%16u)==0 && j->P==3u)
++                        ds_conv1d_nct_f32_avx2_oc4_t16_k3(
++                            j->x, j->w+b0*block_floats, j->b0+c0, j->y+c0*j->M,
++                            j->K, ct, j->P, j->M, j->Q, j->R);
++                    else if(k7t24 && (j->M%24u)==0 && j->P==7u)
+                         ds_conv1d_nct_f32_avx2_oc4_t24_k7(
+                             j->x, j->w+b0*block_floats, j->b0+c0, j->y+c0*j->M,
+                             j->K, ct, j->P, j->M, j->Q, j->R);
+diff --git a/src/runtime/vocoder_conv.c b/src/runtime/vocoder_conv.c
+index 2922347..d912999 100644
+--- a/src/runtime/vocoder_conv.c
++++ b/src/runtime/vocoder_conv.c
+@@ -29,12 +29,16 @@ static void run_padded_conv(
+         ds_threadpool_run(pool,&j);
+     }else if(pack_width==8){
+         const char *ke=getenv("DSASM_KSPEC");
++        const char *k3e=getenv("DSASM_K3_TMODE");
+         const char *k7e=getenv("DSASM_K7_T24");
+         const char *k11e=getenv("DSASM_K11_T24");
++        const int k3mode=k3e?atoi(k3e):0;
+         const int ks=(ke && strcmp(ke,"0")!=0) && !residual && (Tout%8u)==0;
+         const int k7t24=(k7e && strcmp(k7e,"0")!=0) && !residual && (Tout%24u)==0;
+         const int k11t24=(k11e && strcmp(k11e,"0")!=0) && !residual && (Tout%24u)==0;
+         if(residual) ds_conv1d_nct_f32_avx2_oc8_t8_residual(x_padded,w_packed,bias,y,Cin,Cout,K,Tout,Tp,dilation,residual);
++        else if(k3mode==24 && (Tout%24u)==0 && K==3u) ds_conv1d_nct_f32_avx2_oc4_t24_k3(x_padded,w_packed,bias,y,Cin,Cout,K,Tout,Tp,dilation);
++        else if(k3mode==16 && (Tout%16u)==0 && K==3u) ds_conv1d_nct_f32_avx2_oc4_t16_k3(x_padded,w_packed,bias,y,Cin,Cout,K,Tout,Tp,dilation);
+         else if(k7t24 && K==7u) ds_conv1d_nct_f32_avx2_oc4_t24_k7(x_padded,w_packed,bias,y,Cin,Cout,K,Tout,Tp,dilation);
+         else if(k11t24 && K==11u) ds_conv1d_nct_f32_avx2_oc4_t24_k11(x_padded,w_packed,bias,y,Cin,Cout,K,Tout,Tp,dilation);
+         else if(ks && K==3u) ds_conv1d_nct_f32_avx2_oc8_t8_k3(x_padded,w_packed,bias,y,Cin,Cout,K,Tout,Tp,dilation);
+diff --git a/m48work/docs/M48_PERF_GUIDED_K3_TMODE.md b/docs/M48_PERF_GUIDED_K3_TMODE.md
+new file mode 100644
+index 0000000..2212da1
+--- /dev/null
++++ b/docs/M48_PERF_GUIDED_K3_TMODE.md
+@@ -0,0 +1,25 @@
++# M48 — perf-guided K3 register-tile sweep
++
++M45/M46 established that the full-channel owner path benefits from reusing a
++scalar packed weight across several t8 vectors. M47 showed the same strategy is
++not automatically profitable in the 2-D range path: fewer instructions can
++still lose cycles when load pressure lowers IPC.
++
++M48 therefore leaves range kernels disabled and isolates only full K=3 Conv.
++Two bit-exact kernels are added on top of the existing packed8 layout:
++
++- `oc4 x t16`: 8 live accumulators, moderate register pressure.
++- `oc4 x t24`: 12 live accumulators, fewer weight broadcasts.
++
++`DSASM_K3_TMODE=0|16|24` selects the implementation independently of
++`DSASM_KSPEC`, so the current production combination remains:
++
++- `DSASM_KSPEC=0`
++- `DSASM_K7_T24=1`
++- `DSASM_K11_T24=1`
++- `DSASM_RANGE_T24=0`
++- `DSASM_VOCODER_T_TILE=504`
++
++The runner mirrors baseline/t16/t24 order and selects the winner by P-core
++cycles when perf counters are available. Wall time remains secondary because
++sustained AVX2 load on the i5-13420H showed large thermal/power-frequency drift.
+diff --git a/m48work/tools/test_k3_tmode_m48.c b/tools/test_k3_tmode_m48.c
+new file mode 100644
+index 0000000..f8d6589
+--- /dev/null
++++ b/tools/test_k3_tmode_m48.c
+@@ -0,0 +1,30 @@
++#define _POSIX_C_SOURCE 200809L
++#include "dsasm_kernels.h"
++#include <math.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <time.h>
++static uint32_t st=0x48123456u;
++static float fr(void){st=st*1664525u+1013904223u;return ((int32_t)(st>>8))/8388608.0f;}
++static void *am(size_t n){void *p=0;return posix_memalign(&p,64,n)?0:p;}
++static double now_ms(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec*1e3+t.tv_nsec*1e-6;}
++static void sort7(double *a){for(int i=0;i<7;i++)for(int j=i+1;j<7;j++)if(a[j]<a[i]){double z=a[i];a[i]=a[j];a[j]=z;}}
++static int one(size_t Cin,size_t Cout,size_t T,size_t d,int bench){
++ const size_t K=3,pad=d,Tp=T+2*pad,nx=Cin*Tp,nw=Cout*Cin*K,ny=Cout*T;
++ float*x=am(nx*4),*w=am(nw*4),*b=am(Cout*4),*old=am(ny*4),*t16=am(ny*4),*t24=am(ny*4);if(!x||!w||!b||!old||!t16||!t24)return 2;
++ memset(x,0,nx*4);for(size_t ci=0;ci<Cin;ci++)for(size_t t=0;t<T;t++)x[ci*Tp+pad+t]=.1f*fr();
++ for(size_t i=0;i<nw;i++)w[i]=.02f*fr();for(size_t i=0;i<Cout;i++)b[i]=.01f*fr();
++ ds_conv1d_nct_f32_avx2_oc8_t8_k3(x,w,b,old,Cin,Cout,K,T,Tp,d);
++ ds_conv1d_nct_f32_avx2_oc4_t16_k3(x,w,b,t16,Cin,Cout,K,T,Tp,d);
++ ds_conv1d_nct_f32_avx2_oc4_t24_k3(x,w,b,t24,Cin,Cout,K,T,Tp,d);
++
++ float ma16=0,ma24=0;double ss16=0,ss24=0;size_t bd16=0,bd24=0;
++ for(size_t i=0;i<ny;i++){float z=fabsf(old[i]-t16[i]);if(z>ma16)ma16=z;ss16+=(double)z*z;if(memcmp(old+i,t16+i,4))bd16++;z=fabsf(old[i]-t24[i]);if(z>ma24)ma24=z;ss24+=(double)z*z;if(memcmp(old+i,t24+i,4))bd24++;}
++ printf("M48 K3 C=%zu O=%zu T=%zu d=%zu t16[max=%.9g bitdiff=%zu] t24[max=%.9g bitdiff=%zu]\n",Cin,Cout,T,d,ma16,bd16,ma24,bd24);
++ if(ma16>1e-6f||ma24>1e-6f)return 1;
++ if(bench){double a[7],c[7],e[7];for(int r=0;r<7;r++){double q=now_ms();ds_conv1d_nct_f32_avx2_oc8_t8_k3(x,w,b,old,Cin,Cout,K,T,Tp,d);a[r]=now_ms()-q;q=now_ms();ds_conv1d_nct_f32_avx2_oc4_t16_k3(x,w,b,t16,Cin,Cout,K,T,Tp,d);c[r]=now_ms()-q;q=now_ms();ds_conv1d_nct_f32_avx2_oc4_t24_k3(x,w,b,t24,Cin,Cout,K,T,Tp,d);e[r]=now_ms()-q;}sort7(a);sort7(c);sort7(e);printf("M48 K3 micro old=%.3f t16=%.3f (%.3fx) t24=%.3f (%.3fx) ms\n",a[3],c[3],a[3]/c[3],e[3],a[3]/e[3]);}
++ free(x);free(w);free(b);free(old);free(t16);free(t24);return 0;
++}
++int main(void){int r=0;r|=one(8,8,48,1,0);r|=one(128,128,3072,1,1);r|=one(128,128,3072,3,1);r|=one(128,128,3072,5,1);r|=one(64,64,6144,1,1);puts(r?"M48 K3 FAIL":"M48 K3 parity OK");return r;}

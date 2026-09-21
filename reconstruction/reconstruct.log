@@ -1,0 +1,94 @@
+BASE files=188 size=1.6M
+== APPLY diffsinger_m41_profile.patch ==
+patching file src/runtime/vocoder_graph.c
+patching file scripts/run_m41_profile.sh
+patching file docs/M41_HOT_SHAPE_PROFILE.md
+p1 OK
+== APPLY diffsinger_m42_s8k16.patch ==
+patching file docs/M42_CONVTRANSPOSE_S8K16.md
+patching file include/dsasm_kernels.h
+patching file scripts/run_m42_s8k16.sh
+patching file src/kernels/x86_64/convtranspose1d_nct_f32_avx2.S
+patching file src/runtime/threadpool.c
+patching file tools/test_convtranspose_s8k16_m42.c
+p1 OK
+== APPLY diffsinger_m43_sprint.patch ==
+patching file docs/M43_PARALLEL_ADD_VNNI_SWEEP.md
+patching file include/dsasm_threadpool.h
+patching file scripts/run_m43_sprint.sh
+patching file src/runtime/threadpool.c
+patching file src/runtime/threadpool_internal.h
+patching file src/runtime/vocoder_graph.c
+patching file tools/test_parallel_add_m43.c
+p1 OK
+== APPLY diffsinger_m44_asym_vnni.patch ==
+patching file docs/M44_ASYMMETRIC_VNNI.md
+patching file scripts/run_m44_asym_vnni.sh
+patching file src/runtime/vocoder_graph.c
+patching file src/runtime/vocoder_vnni.c
+p1 OK
+== APPLY diffsinger_m45_k7_t24.patch ==
+patching file docs/M45_PERF_GUIDED_K7_T24.md
+patching file include/dsasm_kernels.h
+patching file src/kernels/x86_64/conv1d_nct_f32_avx2_oc8_t8_kspec.S
+patching file src/runtime/threadpool.c
+patching file src/runtime/vocoder_conv.c
+patching file tools/test_k7_t24_m45.c
+p1 OK
+== APPLY diffsinger_m46_k11_t24.patch ==
+patching file docs/M46_PERF_GUIDED_K11_T24.md
+patching file include/dsasm_kernels.h
+patching file src/kernels/x86_64/conv1d_nct_f32_avx2_oc8_t8_kspec.S
+patching file src/runtime/threadpool.c
+patching file src/runtime/vocoder_conv.c
+patching file tools/run_native_e2e_m40_1.py
+patching file tools/test_k11_t24_m46.c
+p1 OK
+== APPLY diffsinger_m47_range_t24.patch ==
+patching file include/dsasm_kernels.h
+patching file src/kernels/x86_64/conv1d_nct_f32_avx2_oc8_t8_kspec.S
+patching file src/runtime/threadpool.c
+patching file src/runtime/vocoder_conv.c
+patching file docs/M47_RANGE_T24_2D.md
+patching file tools/test_range_t24_m47.c
+p1 OK
+== APPLY diffsinger_m48_k3_tmode.patch ==
+patching file include/dsasm_kernels.h
+patching file src/kernels/x86_64/conv1d_nct_f32_avx2_oc8_t8_kspec.S
+patching file src/runtime/threadpool.c
+patching file src/runtime/vocoder_conv.c
+patching file docs/M48_PERF_GUIDED_K3_TMODE.md
+patching file tools/test_k3_tmode_m48.c
+p1 OK
+== APPLY diffsinger_m49_selective_residual_t24.patch ==
+patching file docs/M49_SELECTIVE_RESIDUAL_T24.md
+patching file include/dsasm_kernels.h
+patching file scripts/run_m49_residual_t24.sh
+patching file src/kernels/x86_64/conv1d_nct_f32_avx2_oc8_t8_kspec.S
+patching file src/runtime/threadpool.c
+patching file src/runtime/vocoder_graph.c
+patching file tools/dsv35_common.py
+patching file tools/pack_vocoder_graph_m35.py
+patching file tools/test_residual_t24_m49.c
+p1 OK
+== APPLY diffsinger_m50_release_profile.patch ==
+patching file docs/M50_RELEASE_PROFILE.md
+patching file scripts/run_m50_release.sh
+patching file src/runtime/aux_decoder.c
+patching file src/runtime/fs2_encoder.c
+patching file src/runtime/lynxnet2.c
+patching file src/runtime/threadpool.c
+patching file src/runtime/vocoder_conv.c
+patching file src/runtime/vocoder_graph.c
+patching file tools/run_native_e2e_m40_1.py
+p1 OK
+== APPLY diffsinger_m55_long_memory_passes.patch ==
+patching file docs/M55_LONG_MEMORY_PASSES.md
+patching file include/dsasm_threadpool.h
+patching file src/runtime/threadpool.c
+patching file src/runtime/threadpool_internal.h
+patching file src/runtime/vocoder_conv.c
+patching file src/runtime/vocoder_graph.c
+patching file tools/test_parallel_leaky_m55.c
+p1 OK
+FINAL files=213 size=1.7M

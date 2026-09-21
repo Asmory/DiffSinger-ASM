@@ -1,0 +1,8 @@
+#!/usr/bin/env python3
+from pathlib import Path
+import argparse, torch
+p=argparse.ArgumentParser();p.add_argument('out',type=Path);p.add_argument('--input',type=int,default=64);p.add_argument('--condition',type=int,default=48);p.add_argument('--channels',type=int,default=64);p.add_argument('--hidden',type=int,default=64);p.add_argument('--layers',type=int,default=2);p.add_argument('--seed',type=int,default=77);a=p.parse_args()
+I,Q,C,H,L=a.input,a.condition,a.channels,a.hidden,a.layers;g=torch.Generator().manual_seed(a.seed);r=lambda sh,s:torch.randn(sh,generator=g)*s;base='model.diffusion.denoise_fn';sd={f'{base}.input_projection.weight':r((C,I),.03),f'{base}.input_projection.bias':r((C,),.01),f'{base}.conditioner_projection.weight':r((C,Q,1),.03),f'{base}.conditioner_projection.bias':r((C,),.01),f'{base}.diffusion_embedding.1.weight':r((4*C,C),.02),f'{base}.diffusion_embedding.1.bias':r((4*C,),.01),f'{base}.diffusion_embedding.3.weight':r((C,4*C),.02),f'{base}.diffusion_embedding.3.bias':r((C,),.01),f'{base}.norm.weight':1+r((C,),.04),f'{base}.norm.bias':r((C,),.02),f'{base}.output_projection.weight':r((I,C),.03),f'{base}.output_projection.bias':r((I,),.01)}
+for i in range(L):
+ b=f'{base}.residual_layers.{i}.net';sd.update({f'{b}.0.weight':1+r((C,),.04),f'{b}.0.bias':r((C,),.02),f'{b}.2.weight':r((C,1,31),.025),f'{b}.2.bias':r((C,),.01),f'{b}.4.weight':r((2*H,C),.025),f'{b}.4.bias':r((2*H,),.01),f'{b}.6.weight':r((2*H,H),.025),f'{b}.6.bias':r((2*H,),.01),f'{b}.8.weight':r((C,H),.025),f'{b}.8.bias':r((C,),.01)})
+a.out.parent.mkdir(parents=True,exist_ok=True);torch.save({'state_dict':sd},a.out);print(a.out)

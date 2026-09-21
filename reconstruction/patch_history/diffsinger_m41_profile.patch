@@ -1,0 +1,160 @@
+--- a/src/runtime/vocoder_graph.c
++++ b/src/runtime/vocoder_graph.c
+@@ -76,6 +76,23 @@
+     double vnni_pack_ms,vnni_kernel_ms;
+     DSAsmThreadPool *pool;
+ };
++
++typedef struct {
++    uint32_t op_index;
++    uint32_t type;
++    double ms;
++} DSVocoderHotOp;
++
++static int hot_op_cmp_desc(const void *a,const void *b){
++    const DSVocoderHotOp *x=(const DSVocoderHotOp*)a;
++    const DSVocoderHotOp *y=(const DSVocoderHotOp*)b;
++    return (x->ms<y->ms)-(x->ms>y->ms);
++}
++
++static int profile_shapes_enabled(void){
++    const char *e=getenv("DSASM_PROFILE_SHAPES");
++    return e && strcmp(e,"0")!=0;
++}
+ 
+ static inline double now_ms(void){
+     struct timespec ts; clock_gettime(CLOCK_MONOTONIC_RAW,&ts);
+@@ -248,8 +265,54 @@
+     memcpy(wptr(g,g->h->input_mel),mel,tm->nelem*sizeof(float));
+     memcpy(wptr(g,g->h->input_f0),f0,tf->nelem*sizeof(float));
+     double totals[18]={0};g->vnni_pack_ms=0.0;g->vnni_kernel_ms=0.0;
+-    for(uint32_t i=0;i<g->h->op_count;i++){double a=profile?now_ms():0;int rc=run_op(g,&g->ops[i]);if(rc)return -(1000+(int)i);if(profile)totals[g->ops[i].type]+=now_ms()-a;}
++    const int shape_profile=profile && profile_shapes_enabled();
++    DSVocoderHotOp *hot=shape_profile?calloc(g->h->op_count,sizeof(*hot)):NULL;
++    size_t hot_n=0;
++    for(uint32_t i=0;i<g->h->op_count;i++){
++        double a=profile?now_ms():0;
++        int rc=run_op(g,&g->ops[i]);
++        if(rc){free(hot);return -(1000+(int)i);}
++        if(profile){
++            double dt=now_ms()-a;
++            totals[g->ops[i].type]+=dt;
++            if(hot && (g->ops[i].type==DSV35_CONV || g->ops[i].type==DSV35_CONVTRANSPOSE))
++                hot[hot_n++]=(DSVocoderHotOp){i,g->ops[i].type,dt};
++        }
++    }
+     memcpy(wave,rptr(g,g->h->output),g->h->samples*sizeof(float));
+-    if(profile){static const char*n[]={"","Add","Sub","Mul","Div","Mod","LeakyRelu","Tanh","Sin","CumSum","Reshape","Squeeze","Transpose","Slice","Pad","Conv","ConvTranspose","Unsqueeze"};fprintf(stderr,"DSASM native vocoder op profile:\n");for(int i=1;i<=17;i++)if(totals[i]>0.001)fprintf(stderr,"  %-14s %9.3f ms\n",n[i],totals[i]);if(g->vnni_pack_ms>0.001||g->vnni_kernel_ms>0.001)fprintf(stderr,"  VNNI-pack       %9.3f ms\n  VNNI-kernel     %9.3f ms\n",g->vnni_pack_ms,g->vnni_kernel_ms);}
++    if(profile){
++        static const char*n[]={"","Add","Sub","Mul","Div","Mod","LeakyRelu","Tanh","Sin","CumSum","Reshape","Squeeze","Transpose","Slice","Pad","Conv","ConvTranspose","Unsqueeze"};
++        fprintf(stderr,"DSASM native vocoder op profile:\n");
++        for(int i=1;i<=17;i++)if(totals[i]>0.001)fprintf(stderr,"  %-14s %9.3f ms\n",n[i],totals[i]);
++        if(g->vnni_pack_ms>0.001||g->vnni_kernel_ms>0.001)
++            fprintf(stderr,"  VNNI-pack       %9.3f ms\n  VNNI-kernel     %9.3f ms\n",g->vnni_pack_ms,g->vnni_kernel_ms);
++        if(hot){
++            qsort(hot,hot_n,sizeof(*hot),hot_op_cmp_desc);
++            fprintf(stderr,"DSASM M41 hot Conv/ConvTranspose profile (descending):\n");
++            for(size_t h=0;h<hot_n;h++){
++                const DSV35Op *op=&g->ops[hot[h].op_index];
++                if(op->type==DSV35_CONV){
++                    const size_t Cin=(size_t)op->p[0],Cout=(size_t)op->p[1],K=(size_t)op->p[3];
++                    const size_t Tin=(size_t)op->p[4],pad=(size_t)op->p[5],dil=(size_t)op->p[6],pack=(size_t)op->p[7];
++                    const size_t receptive=dil*(K-1u)+1u;
++                    const size_t Tout=Tin+2u*pad-receptive+1u;
++                    fprintf(stderr,
++                        "  #%03u Conv  %9.3f ms  C=%zux%zu K=%zu T=%zu->%zu d=%zu p=%zu pack=%zu path=%s%s%s\n",
++                        hot[h].op_index,hot[h].ms,Cin,Cout,K,Tin,Tout,dil,pad,pack,
++                        op_uses_vnni(g,op)?"VNNI":"FP32",
++                        (op->flags&DSV36_CONV_FUSED_LEAKY)?"+leaky":"",
++                        (op->flags&DSV38_CONV_FUSED_RESIDUAL)?"+res":"");
++                }else{
++                    const size_t Cin=(size_t)op->p[0],Cout=(size_t)op->p[1],K=(size_t)op->p[2];
++                    const size_t Tin=(size_t)op->p[3],pad=(size_t)op->p[4],stride=(size_t)op->p[5];
++                    const size_t Tout=(Tin-1u)*stride-2u*pad+K;
++                    fprintf(stderr,
++                        "  #%03u ConvT %9.3f ms  C=%zux%zu K=%zu T=%zu->%zu stride=%zu p=%zu\n",
++                        hot[h].op_index,hot[h].ms,Cin,Cout,K,Tin,Tout,stride,pad);
++                }
++            }
++        }
++    }
++    free(hot);
+     return 0;
+ }
+--- a/scripts/run_m41_profile.sh
++++ b/scripts/run_m41_profile.sh
+@@ -0,0 +1,54 @@
++#!/usr/bin/env bash
++set -euo pipefail
++PROJECT="${PROJECT:-/home/fuurin/asm/diffsinger}"
++MODEL="${MODEL:-$PROJECT/model/DongFangZhiZi_Nectar_DiffSinger_CE_26.08.31}"
++PY="${PY:-$PROJECT/.venv/bin/python}"
++ROUNDS="${M41_ROUNDS:-7}"
++cd "$PROJECT"
++
++make -j"$(nproc)" build/dsasm-vocoder-m40
++mkdir -p build/m41_profile
++
++BUNDLE=build/m41_profile/nsf_hifigan.dsv35
++WORK=build/m41_profile/packer
++if [[ ! -f "$BUNDLE" ]]; then
++  rm -rf "$WORK"
++  mkdir -p "$WORK"
++  "$PY" tools/pack_vocoder_graph_m35.py \
++    "$MODEL/dsvocoder/nsf_hifigan.onnx" \
++    --frames 48 --vnni-scope stage128 \
++    --out "$BUNDLE" --work "$WORK"
++fi
++
++MEL="$WORK/mel.f32"
++F0="$WORK/f0.f32"
++GOLD="$WORK/golden_wave.f32"
++
++run_case() {
++  local tag="$1" workers="$2"; shift 2
++  echo
++  echo "========== M41 $tag workers=$workers =========="
++  env "$@" \
++    DSASM_PROFILE_SHAPES=1 \
++    DSASM_GOLDEN_COS=0.999 DSASM_GOLDEN_SNR=25 \
++    ./build/dsasm-vocoder-m40 infer "$BUNDLE" \
++      --mel "$MEL" --f0 "$F0" \
++      --out "build/m41_profile/${tag}.f32" --golden "$GOLD" \
++      --workers "$workers" --rounds "$ROUNDS" --profile \
++    2>&1 | tee "build/m41_profile/${tag}.log"
++}
++
++# Current M40.1 winner first, then isolate scheduler/kernel effects.
++run_case baseline_k11_w4 4 DSASM_VNNI=k11 DSASM_KSPEC=1
++run_case genericK_k11_w4 4 DSASM_VNNI=k11 DSASM_KSPEC=0
++run_case staticOC_k11_w4 4 DSASM_VNNI=k11 DSASM_KSPEC=1 DSASM_2D=0
++run_case baseline_k11_w6 6 DSASM_VNNI=k11 DSASM_KSPEC=1
++run_case baseline_k11_w8 8 DSASM_VNNI=k11 DSASM_KSPEC=1
++
++printf '\n========== M41 SUMMARY =========='; printf '\n'
++for f in build/m41_profile/*.log; do
++  printf '\n--- %s ---\n' "$(basename "$f")"
++  grep -E 'PURE-ASM vocoder:|parity max_abs=|^(  Conv|  ConvTranspose|  VNNI-)|^  #[0-9]+ (Conv |ConvT)' "$f" | head -35 || true
++done
++
++printf '\nM41 logs: %s\n' "$PROJECT/build/m41_profile"
+--- a/docs/M41_HOT_SHAPE_PROFILE.md
++++ b/docs/M41_HOT_SHAPE_PROFILE.md
+@@ -0,0 +1,17 @@
++# M41 — Hot-shape Conv profiler
++
++M40.1 reached a real end-to-end RTF of about 1.10 with selective K11 AVX-VNNI,
++while ordinary FP32 Conv remained the largest vocoder cost.  M41 deliberately
++changes no model math and no default kernel selection.  It adds a profile-only
++shape breakdown so the next ASM kernel is chosen from measured end-to-end cost.
++
++Set `DSASM_PROFILE_SHAPES=1` together with the existing CLI `--profile` flag to
++print every Conv/ConvTranspose node in descending wall-time order.  Each line
++includes the graph op index, Cin/Cout, K, time length, dilation/stride, packing
++width and FP32/VNNI path.
++
++`scripts/run_m41_profile.sh` reuses one packed 48-frame real NSF-HiFiGAN bundle
++and runs the current K11 winner plus controlled A/B cases for fixed-K kernels,
++2-D late-stage scheduling, and 4/6/8 worker counts.
++
++No M41 code path is active unless profiling is explicitly enabled.

@@ -1,0 +1,305 @@
+diff --git a/docs/M45_PERF_GUIDED_K7_T24.md b/docs/M45_PERF_GUIDED_K7_T24.md
+new file mode 100644
+index 0000000..7c125f2
+--- /dev/null
++++ b/docs/M45_PERF_GUIDED_K7_T24.md
+@@ -0,0 +1,23 @@
++# M45 perf-guided K7 oc4 x t24
++
++M45.1 perf on the i5-13420H showed fixed-K Conv1d dominates P-core cycles:
++K7 full 29.43%, K11 full 21.89%, K3 full 14.48%, plus range variants.
++`perf annotate` placed substantial samples on the repeated memory-source
++`vbroadcastss` instructions inside the Cin loop.
++
++The M45 K7 kernel changes only the register tile. Existing packed8 weights and
++NCT tensors are unchanged. It computes four output channels across 24 time
++samples (three YMM time vectors), keeping 12 accumulators live. One scalar
++weight broadcast is therefore reused by three t8 vectors. Compared with three
++old oc8xt8 tiles over the same 8x24 output region, this roughly changes the hot
++inner work from 21 input vector loads + 168 scalar broadcasts to 42 input vector
++loads + 56 scalar broadcasts, while keeping the same 168 FMAs and the same
++per-output accumulation order.
++
++Enable independently of the old K-specialization switch with:
++
++    DSASM_K7_T24=1
++
++Only full K7 Conv with Tout divisible by 24 uses the new path. M37 2-D range
++jobs stay on the existing range kernels. This deliberately targets the hottest
++128x128/T3072 and 64x64/T6144 K7 layers first.
+diff --git a/include/dsasm_kernels.h b/include/dsasm_kernels.h
+index 71df53b..e08dc60 100644
+--- a/include/dsasm_kernels.h
++++ b/include/dsasm_kernels.h
+@@ -148,6 +148,8 @@ void ds_conv1d_nct_f32_avx2_oc8_t8_k3(
+     const float*,const float*,const float*,float*,size_t,size_t,size_t,size_t,size_t,size_t);
+ void ds_conv1d_nct_f32_avx2_oc8_t8_k7(
+     const float*,const float*,const float*,float*,size_t,size_t,size_t,size_t,size_t,size_t);
++void ds_conv1d_nct_f32_avx2_oc4_t24_k7(
++    const float*,const float*,const float*,float*,size_t,size_t,size_t,size_t,size_t,size_t);
+ void ds_conv1d_nct_f32_avx2_oc8_t8_k11(
+     const float*,const float*,const float*,float*,size_t,size_t,size_t,size_t,size_t,size_t);
+ void ds_conv1d_nct_f32_avx2_oc8_t8_range_k3(
+diff --git a/src/kernels/x86_64/conv1d_nct_f32_avx2_oc8_t8_kspec.S b/src/kernels/x86_64/conv1d_nct_f32_avx2_oc8_t8_kspec.S
+index 91cd3d0..1e70c95 100644
+--- a/src/kernels/x86_64/conv1d_nct_f32_avx2_oc8_t8_kspec.S
++++ b/src/kernels/x86_64/conv1d_nct_f32_avx2_oc8_t8_kspec.S
+@@ -1360,4 +1360,172 @@ ds_conv1d_nct_f32_avx2_oc8_t8_range_k11:
+     pop rbp
+     ret
+ .size ds_conv1d_nct_f32_avx2_oc8_t8_range_k11,.-ds_conv1d_nct_f32_avx2_oc8_t8_range_k11
++
++
++# M45 perf-guided K=7 kernel: oc4 x t24.
++#
++# M45.1 perf showed the K7 fixed-size inner loop dominated P-core cycles and
++# that memory-source vbroadcastss instructions were the hottest individual
++# instructions.  The old oc8xt8 kernel re-broadcasts the same eight weights for
++# every t8 tile.  This kernel trades cheap L1 input reloads for weight-broadcast
++# reuse: four output channels x three t8 vectors keep 12 accumulators live, so
++# each scalar weight broadcast feeds 24 output samples before the next weight.
++# Packed weights remain the existing [oc8-block][Cin][K][8] format and the
++# accumulation order for every output element is unchanged.
++.macro M45_K7_STEP
++    vmovups ymm12, YMMWORD PTR [rdi]
++    vmovups ymm13, YMMWORD PTR [rdi+32]
++    vmovups ymm14, YMMWORD PTR [rdi+64]
++
++    vbroadcastss ymm15, DWORD PTR [rax+0]
++    vfmadd231ps ymm0, ymm12, ymm15
++    vfmadd231ps ymm1, ymm13, ymm15
++    vfmadd231ps ymm2, ymm14, ymm15
++
++    vbroadcastss ymm15, DWORD PTR [rax+4]
++    vfmadd231ps ymm3, ymm12, ymm15
++    vfmadd231ps ymm4, ymm13, ymm15
++    vfmadd231ps ymm5, ymm14, ymm15
++
++    vbroadcastss ymm15, DWORD PTR [rax+8]
++    vfmadd231ps ymm6, ymm12, ymm15
++    vfmadd231ps ymm7, ymm13, ymm15
++    vfmadd231ps ymm8, ymm14, ymm15
++
++    vbroadcastss ymm15, DWORD PTR [rax+12]
++    vfmadd231ps ymm9, ymm12, ymm15
++    vfmadd231ps ymm10, ymm13, ymm15
++    vfmadd231ps ymm11, ymm14, ymm15
++
++    add rdi, r15
++    add rax, 32
++.endm
++
++.globl ds_conv1d_nct_f32_avx2_oc4_t24_k7
++.type ds_conv1d_nct_f32_avx2_oc4_t24_k7,@function
++ds_conv1d_nct_f32_avx2_oc4_t24_k7:
++    push rbp
++    mov rbp, rsp
++    push rbx
++    push r12
++    push r13
++    push r14
++    push r15
++    sub rsp, 24
++
++    test r8, r8
++    jz .m45_done_7
++    test r9, r9
++    jz .m45_done_7
++    test r9, 7
++    jnz .m45_done_7
++
++    mov r12, r8                       # Cin
++    mov r13, QWORD PTR [rbp+24]       # Tout (caller gates Tout % 24 == 0)
++    mov r14, QWORD PTR [rbp+32]       # Tp
++    shl r14, 2                        # Tp bytes
++    mov r15, QWORD PTR [rbp+40]       # dilation
++    shl r15, 2                        # dilation bytes
++    mov QWORD PTR [rsp+0], rdi        # original x
++    mov rax, r12
++    imul rax, 224                     # Cin * 7 * 8 * sizeof(float)
++    mov QWORD PTR [rsp+8], rax        # packed-weight bytes / oc8 block
++    mov rbx, r9
++    shr rbx, 3                        # oc8 block count
++
++.m45_ob_7:
++    xor r8d, r8d                      # byte offset of lane 0 or lane 4 in packed8
++.m45_half_7:
++    # y-half base: lane4 starts four NCT channels later = 16*Tout bytes.
++    mov rdi, r8
++    imul rdi, r13
++    add rdi, rcx
++    mov QWORD PTR [rsp+16], rdi
++
++    xor r10d, r10d
++.m45_t_7:
++    cmp r10, r13
++    jae .m45_next_half_7
++
++    lea rdi, [rdx+r8]
++    vbroadcastss ymm0, DWORD PTR [rdi+0]
++    vmovaps ymm1, ymm0
++    vmovaps ymm2, ymm0
++    vbroadcastss ymm3, DWORD PTR [rdi+4]
++    vmovaps ymm4, ymm3
++    vmovaps ymm5, ymm3
++    vbroadcastss ymm6, DWORD PTR [rdi+8]
++    vmovaps ymm7, ymm6
++    vmovaps ymm8, ymm6
++    vbroadcastss ymm9, DWORD PTR [rdi+12]
++    vmovaps ymm10, ymm9
++    vmovaps ymm11, ymm9
++
++    mov r11, QWORD PTR [rsp+0]
++    lea r11, [r11+r10*4]
++    mov rax, rsi
++    add rax, r8
++    mov r9, r12
++.m45_ci_7:
++    mov rdi, r11
++    M45_K7_STEP
++    M45_K7_STEP
++    M45_K7_STEP
++    M45_K7_STEP
++    M45_K7_STEP
++    M45_K7_STEP
++    M45_K7_STEP
++    add r11, r14
++    dec r9
++    jnz .m45_ci_7
++
++    mov rdi, QWORD PTR [rsp+16]
++    lea rdi, [rdi+r10*4]
++    mov r11, r13
++    shl r11, 2                        # one output-channel stride in bytes
++
++    vmovups YMMWORD PTR [rdi+0], ymm0
++    vmovups YMMWORD PTR [rdi+32], ymm1
++    vmovups YMMWORD PTR [rdi+64], ymm2
++    add rdi, r11
++    vmovups YMMWORD PTR [rdi+0], ymm3
++    vmovups YMMWORD PTR [rdi+32], ymm4
++    vmovups YMMWORD PTR [rdi+64], ymm5
++    add rdi, r11
++    vmovups YMMWORD PTR [rdi+0], ymm6
++    vmovups YMMWORD PTR [rdi+32], ymm7
++    vmovups YMMWORD PTR [rdi+64], ymm8
++    add rdi, r11
++    vmovups YMMWORD PTR [rdi+0], ymm9
++    vmovups YMMWORD PTR [rdi+32], ymm10
++    vmovups YMMWORD PTR [rdi+64], ymm11
++
++    add r10, 24
++    jmp .m45_t_7
++
++.m45_next_half_7:
++    add r8, 16
++    cmp r8, 32
++    jb .m45_half_7
++
++    add rsi, QWORD PTR [rsp+8]
++    add rdx, 32
++    mov rax, r13
++    shl rax, 5                        # 8 * Tout * sizeof(float)
++    add rcx, rax
++    dec rbx
++    jnz .m45_ob_7
++
++.m45_done_7:
++    vzeroupper
++    add rsp, 24
++    pop r15
++    pop r14
++    pop r13
++    pop r12
++    pop rbx
++    pop rbp
++    ret
++.size ds_conv1d_nct_f32_avx2_oc4_t24_k7,.-ds_conv1d_nct_f32_avx2_oc4_t24_k7
++
+ .section .note.GNU-stack,"",@progbits
+diff --git a/src/runtime/threadpool.c b/src/runtime/threadpool.c
+index 345afee..324895a 100644
+--- a/src/runtime/threadpool.c
++++ b/src/runtime/threadpool.c
+@@ -178,18 +178,26 @@ static void run_m_slice(const DSAsmJob *j,size_t id,size_t nthreads){
+                 if(j->residual) ds_conv1d_nct_f32_avx2_oc8_t8_residual(
+                     j->x, j->w+b0*block_floats, j->b0+c0, j->y+c0*j->M,
+                     j->K, ct, j->P, j->M, j->Q, j->R, j->residual+c0*j->M);
+-                else if(j->T && (j->M%8u)==0 && j->P==3u) ds_conv1d_nct_f32_avx2_oc8_t8_k3(
++                else {
++                    const char *k7e=getenv("DSASM_K7_T24");
++                    const int k7t24=(k7e && strcmp(k7e,"0")!=0);
++                    if(k7t24 && (j->M%24u)==0 && j->P==7u)
++                        ds_conv1d_nct_f32_avx2_oc4_t24_k7(
++                            j->x, j->w+b0*block_floats, j->b0+c0, j->y+c0*j->M,
++                            j->K, ct, j->P, j->M, j->Q, j->R);
++                    else if(j->T && (j->M%8u)==0 && j->P==3u) ds_conv1d_nct_f32_avx2_oc8_t8_k3(
+                     j->x, j->w+b0*block_floats, j->b0+c0, j->y+c0*j->M,
+                     j->K, ct, j->P, j->M, j->Q, j->R);
+                 else if(j->T && (j->M%8u)==0 && j->P==7u) ds_conv1d_nct_f32_avx2_oc8_t8_k7(
+                     j->x, j->w+b0*block_floats, j->b0+c0, j->y+c0*j->M,
+                     j->K, ct, j->P, j->M, j->Q, j->R);
+-                else if(j->T && (j->M%8u)==0 && j->P==11u) ds_conv1d_nct_f32_avx2_oc8_t8_k11(
+-                    j->x, j->w+b0*block_floats, j->b0+c0, j->y+c0*j->M,
+-                    j->K, ct, j->P, j->M, j->Q, j->R);
+-                else ds_conv1d_nct_f32_avx2_oc8_t8(
+-                    j->x, j->w+b0*block_floats, j->b0+c0, j->y+c0*j->M,
+-                    j->K, ct, j->P, j->M, j->Q, j->R);
++                    else if(j->T && (j->M%8u)==0 && j->P==11u) ds_conv1d_nct_f32_avx2_oc8_t8_k11(
++                        j->x, j->w+b0*block_floats, j->b0+c0, j->y+c0*j->M,
++                        j->K, ct, j->P, j->M, j->Q, j->R);
++                    else ds_conv1d_nct_f32_avx2_oc8_t8(
++                        j->x, j->w+b0*block_floats, j->b0+c0, j->y+c0*j->M,
++                        j->K, ct, j->P, j->M, j->Q, j->R);
++                }
+             }
+             else ds_conv1d_nct_f32_avx2_oc4_t8(
+                 j->x, j->w+b0*block_floats, j->b0+c0, j->y+c0*j->M,
+diff --git a/src/runtime/vocoder_conv.c b/src/runtime/vocoder_conv.c
+index ecf0546..6941f24 100644
+--- a/src/runtime/vocoder_conv.c
++++ b/src/runtime/vocoder_conv.c
+@@ -28,8 +28,11 @@ static void run_padded_conv(
+         ds_threadpool_run(pool,&j);
+     }else if(pack_width==8){
+         const char *ke=getenv("DSASM_KSPEC");
++        const char *k7e=getenv("DSASM_K7_T24");
+         const int ks=(ke && strcmp(ke,"0")!=0) && !residual && (Tout%8u)==0;
++        const int k7t24=(k7e && strcmp(k7e,"0")!=0) && !residual && (Tout%24u)==0;
+         if(residual) ds_conv1d_nct_f32_avx2_oc8_t8_residual(x_padded,w_packed,bias,y,Cin,Cout,K,Tout,Tp,dilation,residual);
++        else if(k7t24 && K==7u) ds_conv1d_nct_f32_avx2_oc4_t24_k7(x_padded,w_packed,bias,y,Cin,Cout,K,Tout,Tp,dilation);
+         else if(ks && K==3u) ds_conv1d_nct_f32_avx2_oc8_t8_k3(x_padded,w_packed,bias,y,Cin,Cout,K,Tout,Tp,dilation);
+         else if(ks && K==7u) ds_conv1d_nct_f32_avx2_oc8_t8_k7(x_padded,w_packed,bias,y,Cin,Cout,K,Tout,Tp,dilation);
+         else if(ks && K==11u) ds_conv1d_nct_f32_avx2_oc8_t8_k11(x_padded,w_packed,bias,y,Cin,Cout,K,Tout,Tp,dilation);
+diff --git a/tools/test_k7_t24_m45.c b/tools/test_k7_t24_m45.c
+new file mode 100644
+index 0000000..537b80b
+--- /dev/null
++++ b/tools/test_k7_t24_m45.c
+@@ -0,0 +1,26 @@
++#define _POSIX_C_SOURCE 200809L
++#include "dsasm_kernels.h"
++#include <math.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <time.h>
++static uint32_t st=0x45123456u;
++static float fr(void){st=st*1664525u+1013904223u;return ((int32_t)(st>>8))/8388608.0f;}
++static void *am(size_t n){void *p=0;return posix_memalign(&p,64,n)?0:p;}
++static double now_ms(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec*1e3+t.tv_nsec*1e-6;}
++static int one(size_t Cin,size_t Cout,size_t T,size_t d,int bench){
++ const size_t K=7,pad=3*d,Tp=T+2*pad,nx=Cin*Tp,nw=Cout*Cin*K,ny=Cout*T;
++ float*x=am(nx*4),*w=am(nw*4),*b=am(Cout*4),*a=am(ny*4),*c=am(ny*4);if(!x||!w||!b||!a||!c)return 2;
++ memset(x,0,nx*4);for(size_t ci=0;ci<Cin;ci++)for(size_t t=0;t<T;t++)x[ci*Tp+pad+t]=.1f*fr();
++ for(size_t i=0;i<nw;i++)w[i]=.02f*fr();for(size_t i=0;i<Cout;i++)b[i]=.01f*fr();
++ ds_conv1d_nct_f32_avx2_oc8_t8_k7(x,w,b,a,Cin,Cout,K,T,Tp,d);
++ ds_conv1d_nct_f32_avx2_oc4_t24_k7(x,w,b,c,Cin,Cout,K,T,Tp,d);
++ float ma=0;double ss=0;size_t bitdiff=0;for(size_t i=0;i<ny;i++){float z=fabsf(a[i]-c[i]);if(z>ma)ma=z;ss+=(double)z*z;if(memcmp(a+i,c+i,4))bitdiff++;}
++ printf("M45 K7 C=%zu O=%zu T=%zu d=%zu max_abs=%.9g rmse=%.9g bitdiff=%zu\n",Cin,Cout,T,d,ma,sqrt(ss/ny),bitdiff);
++ if(ma>1e-6f)return 1;
++ if(bench){enum{R=7};double old[R],neo[R];for(int r=0;r<R;r++){double q=now_ms();ds_conv1d_nct_f32_avx2_oc8_t8_k7(x,w,b,a,Cin,Cout,K,T,Tp,d);old[r]=now_ms()-q;q=now_ms();ds_conv1d_nct_f32_avx2_oc4_t24_k7(x,w,b,c,Cin,Cout,K,T,Tp,d);neo[r]=now_ms()-q;}for(int i=0;i<R;i++)for(int j=i+1;j<R;j++){if(old[j]<old[i]){double z=old[i];old[i]=old[j];old[j]=z;}if(neo[j]<neo[i]){double z=neo[i];neo[i]=neo[j];neo[j]=z;}}printf("M45 K7 micro old=%.3f ms t24=%.3f ms speedup=%.3fx\n",old[R/2],neo[R/2],old[R/2]/neo[R/2]);}
++ free(x);free(w);free(b);free(a);free(c);return 0;
++}
++int main(void){int r=0;r|=one(8,8,48,1,0);r|=one(16,16,96,3,0);r|=one(128,128,3072,1,1);r|=one(128,128,3072,3,1);r|=one(128,128,3072,5,1);puts(r?"M45 K7 t24 FAIL":"M45 K7 t24 parity OK");return r;}

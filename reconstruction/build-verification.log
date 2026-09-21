@@ -1,0 +1,45 @@
+mkdir -p build
+cc -Iinclude -Isrc/runtime -O3 -Wall -Wextra -std=c11 -march=native -fPIC -c src/runtime/vocoder_graph.c -o build/vocoder_graph_runtime.o
+cc -Iinclude -Isrc/runtime -O3 -Wall -Wextra -std=c11 -march=native -fPIC -c src/runtime/vocoder_vnni.c -o build/vocoder_vnni_runtime.o
+cc -Iinclude -Isrc/runtime -O3 -Wall -Wextra -std=c11 -march=native -ffp-contract=off -fPIC -c src/runtime/vocoder_conv.c -o build/vocoder_conv_runtime.o
+cc -Iinclude -Isrc/runtime -O3 -Wall -Wextra -std=c11 -march=native -fPIC -pthread -c src/runtime/threadpool.c -o build/threadpool.o
+cc -c src/kernels/x86_64/conv1d_nct_f32_avx2_oc4_t8.S -o build/conv1d_m32.o
+cc -c src/kernels/x86_64/convtranspose1d_nct_f32_avx2.S -o build/convtranspose_m33.o
+cc -c src/kernels/x86_64/leaky_relu_f32_avx2.S -o build/leaky_relu_m33.o
+cc -c src/kernels/x86_64/add_f32_avx2.S -o build/add_m33.o
+cc -c src/kernels/x86_64/linear_f32_avx2_m4n16.S -o build/linear_m4n16.o
+cc -c src/kernels/x86_64/linear_residual_f32_avx2_m4n16.S -o build/linear_residual_m4n16.o
+cc -c src/kernels/x86_64/linear_f32_avx2_m4n16_strided.S -o build/linear_m4n16_strided.o
+cc -c src/kernels/x86_64/linear_residual_f32_avx2_m4n16_strided.S -o build/linear_residual_m4n16_strided.o
+cc -c src/kernels/x86_64/linear_f32_avx2_m4n16_idxstrided.S -o build/linear_m4n16_idxstrided.o
+cc -c src/kernels/x86_64/linear_residual_f32_avx2_m4n16_idxstrided.S -o build/linear_residual_m4n16_idxstrided.o
+cc -c src/kernels/x86_64/linear_f32_avx2_n16_kblock_accum.S -o build/linear_n16_kblock.o
+cc -c src/kernels/x86_64/depthwise_conv1d_k31_tc_f32_avx2_cstrided.S -o build/dwconv_k31_tc_cstrided.o
+cc -c src/kernels/x86_64/fused_linear_softsign_glu_f32_avx2_m4n8.S -o build/glu_m6.o
+cc -c src/kernels/x86_64/atan_glu_f32_avx2_ystrided.S -o build/atan_glu_m9_strided.o
+cc -c src/kernels/x86_64/conv1d_vnni_u8s8_t8_oc8.S -o build/conv1d_m39_vnni.o
+cc -c src/kernels/x86_64/vnni_pack_u8_4x8_avx2.S -o build/vnni_pack_m40_1.o
+cc -c src/kernels/x86_64/conv1d_nct_f32_avx2_oc8_t8.S -o build/conv1d_m36.o
+cc -c src/kernels/x86_64/conv1d_nct_f32_avx2_oc8_t8_range.S -o build/conv1d_m37_range.o
+cc -c src/kernels/x86_64/conv1d_nct_f32_avx2_oc8_t8_kspec.S -o build/conv1d_m39_kspec.o
+cc -c src/kernels/x86_64/conv1d_nct_f32_avx2_oc8_t8_residual.S -o build/conv1d_m38_residual.o
+cc -c src/kernels/x86_64/conv1d_nct_f32_avx2_oc8_t8_range_residual.S -o build/conv1d_m38_range_residual.o
+cc -c src/kernels/x86_64/leaky_copy_nct_f32_avx2.S -o build/leaky_copy_m36.o
+cc -Iinclude -Isrc/runtime -O3 -Wall -Wextra -std=c11 -march=native -ffp-contract=off -fPIC -c src/runtime/model_loader.c -o build/model_loader_runtime.o
+cc -Iinclude -Isrc/runtime -O3 -Wall -Wextra -std=c11 -march=native -ffp-contract=off -fPIC -c src/runtime/full_acoustic.c -o build/full_acoustic_runtime.o
+cc -Iinclude -Isrc/runtime -O3 -Wall -Wextra -std=c11 -march=native -ffp-contract=off -fPIC -c src/runtime/post_fs2.c -o build/post_fs2_runtime.o
+cc -Iinclude -Isrc/runtime -O3 -Wall -Wextra -std=c11 -march=native -fPIC -c src/runtime/aux_decoder.c -o build/aux_decoder_runtime.o
+cc -Iinclude -Isrc/runtime -O3 -Wall -Wextra -std=c11 -march=native -ffp-contract=off -fPIC -c src/runtime/fs2_front.c -o build/fs2_front_runtime.o
+cc -Iinclude -Isrc/runtime -O3 -Wall -Wextra -std=c11 -march=native -ffp-contract=off -fPIC -c src/runtime/acoustic.c -o build/acoustic_runtime.o
+cc -Iinclude -Isrc/runtime -O3 -Wall -Wextra -std=c11 -march=native -ffp-contract=off -fPIC -c src/runtime/reflow.c -o build/reflow_runtime.o
+cc -Iinclude -Isrc/runtime -O3 -Wall -Wextra -std=c11 -march=native -fPIC -c src/runtime/lynxnet2.c -o build/lynxnet2_runtime.o
+cc -c src/kernels/x86_64/layernorm_f32_avx2.S -o build/layernorm.o
+cc -c src/kernels/x86_64/depthwise_conv1d_k31_tc_f32_avx2.S -o build/dwconv_k31_tc.o
+cc -c src/kernels/x86_64/depthwise_conv1d_k7_tc_f32_avx2.S -o build/dwconv_k7_tc.o
+cc -c src/kernels/x86_64/atan_glu_f32_avx2.S -o build/atan_glu_m7.o
+cc -c src/kernels/x86_64/add3_broadcast_f32_avx2.S -o build/add3_m7.o
+cc -Iinclude -Isrc/runtime -O3 -Wall -Wextra -std=c11 -march=native -ffp-contract=off -fPIC -c src/runtime/fs2_encoder.c -o build/fs2_encoder_runtime.o
+cc -c src/kernels/x86_64/dot_f32_avx2_fma.S -o build/dot_avx2.o
+cc -c src/kernels/x86_64/layernorm_f32_avx2_precise.S -o build/layernorm_precise.o
+cc -Iinclude -Isrc/runtime -O3 -Wall -Wextra -std=c11 -march=native src/cli/dsasm_vocoder.c build/vocoder_graph_runtime.o build/vocoder_vnni_runtime.o build/vocoder_conv_runtime.o build/threadpool.o build/conv1d_m32.o build/convtranspose_m33.o build/leaky_relu_m33.o build/add_m33.o build/linear_m4n16.o build/linear_residual_m4n16.o build/linear_m4n16_strided.o build/linear_residual_m4n16_strided.o build/linear_m4n16_idxstrided.o build/linear_residual_m4n16_idxstrided.o build/linear_n16_kblock.o build/dwconv_k31_tc_cstrided.o build/glu_m6.o build/atan_glu_m9_strided.o build/conv1d_m39_vnni.o build/vnni_pack_m40_1.o build/conv1d_m36.o build/conv1d_m37_range.o build/conv1d_m39_kspec.o build/conv1d_m38_residual.o build/conv1d_m38_range_residual.o build/leaky_copy_m36.o -o build/dsasm-vocoder-m40 -lm -pthread
+cc -Iinclude -Isrc/runtime -O3 -Wall -Wextra -std=c11 -march=native src/cli/dsasm_acoustic.c build/model_loader_runtime.o build/full_acoustic_runtime.o build/post_fs2_runtime.o build/aux_decoder_runtime.o build/fs2_front_runtime.o build/acoustic_runtime.o build/reflow_runtime.o build/lynxnet2_runtime.o build/threadpool.o build/vnni_pack_m40_1.o build/conv1d_m32.o build/conv1d_m36.o build/conv1d_m37_range.o build/conv1d_m39_kspec.o build/conv1d_m38_residual.o build/conv1d_m38_range_residual.o build/convtranspose_m33.o build/glu_m6.o build/linear_m4n16.o build/linear_residual_m4n16.o build/linear_m4n16_strided.o build/linear_residual_m4n16_strided.o build/linear_m4n16_idxstrided.o build/linear_residual_m4n16_idxstrided.o build/linear_n16_kblock.o build/layernorm.o build/dwconv_k31_tc.o build/dwconv_k31_tc_cstrided.o build/dwconv_k7_tc.o build/atan_glu_m7.o build/atan_glu_m9_strided.o build/add3_m7.o build/fs2_encoder_runtime.o build/dot_avx2.o build/layernorm_precise.o -o build/dsasm-acoustic -lm -pthread

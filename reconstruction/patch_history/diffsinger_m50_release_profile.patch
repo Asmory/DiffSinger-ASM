@@ -1,0 +1,370 @@
+diff -ruN a/docs/M50_RELEASE_PROFILE.md b/docs/M50_RELEASE_PROFILE.md
+--- a/docs/M50_RELEASE_PROFILE.md	1970-01-01 00:00:00.000000000 +0000
++++ b/docs/M50_RELEASE_PROFILE.md	2026-09-20 22:04:47.198704381 +0000
+@@ -0,0 +1,19 @@
++# M50 release profile
++
++M50 freezes the perf-guided M45-M49 vocoder choices as production defaults:
++
++- `DSASM_KSPEC=0`
++- `DSASM_K3_TMODE=24`
++- `DSASM_K7_T24=1`
++- `DSASM_K11_T24=1`
++- `DSASM_RANGE_T24=0`
++- `DSASM_VOCODER_T_TILE=504`
++- `DSASM_RESIDUAL_T24=1`
++- `DSASM_VNNI=k11`, symmetric quantization, `DSASM_VNNI_CIN=128`
++- M42 stride8/K16 ConvTranspose remains default-on
++- parallel Add remains default-off
++
++Every setting is still overrideable by its environment variable.  The release
++runner compares implicit defaults against the explicit M49 profile, checks
++waveform parity, records P-core cycles when perf is available, and runs the
++native acoustic -> native vocoder E2E gate.
+diff -ruN a/scripts/run_m50_release.sh b/scripts/run_m50_release.sh
+--- a/scripts/run_m50_release.sh	1970-01-01 00:00:00.000000000 +0000
++++ b/scripts/run_m50_release.sh	2026-09-20 22:05:47.559494295 +0000
+@@ -0,0 +1,131 @@
++#!/usr/bin/env bash
++set -euo pipefail
++export LC_ALL=C
++PROJECT="${PROJECT:-$HOME/asm/diffsinger}"
++MODEL="${MODEL:-$PROJECT/model/DongFangZhiZi_Nectar_DiffSinger_CE_26.08.31}"
++PY="${PY:-$PROJECT/.venv/bin/python}"
++cd "$PROJECT"
++
++printf '\n========== M50 BUILD / WARNING GATE ==========\n'
++make clean >/dev/null
++mkdir -p build/m50
++# Capture build output and fail if the old DSAsmJob vnni_fn warning returns.
++make -j"$(nproc)" build/dsasm-vocoder-m40 build/dsasm-acoustic 2>&1 | tee build/m50/build.log
++if grep -q "missing initializer for field 'vnni_fn'" build/m50/build.log; then
++  echo 'M50 ERROR: DSAsmJob vnni_fn warning regressed' >&2; exit 2
++fi
++
++printf '\n========== M50 PACK RELEASE BUNDLE ==========\n'
++rm -rf build/m50/packer
++"$PY" tools/pack_vocoder_graph_m35.py "$MODEL/dsvocoder/nsf_hifigan.onnx" \
++  --frames 48 --vnni-scope all-k711 --residual-scope k7ge128 \
++  --out build/m50/nsf_release.dsv35 --work build/m50/packer
++BUNDLE=build/m50/nsf_release.dsv35
++MEL=build/m50/packer/mel.f32
++F0=build/m50/packer/f0.f32
++GOLD=build/m50/packer/golden_wave.f32
++
++PERF_ARGS=()
++if command -v perf >/dev/null 2>&1; then
++  if perf stat -e cpu_core/cycles/u -e cpu_core/instructions/u -- true >/dev/null 2>&1; then
++    PERF_ARGS=(-e cpu_core/cycles/u -e cpu_core/instructions/u)
++  elif perf stat -e cycles:u -e instructions:u -- true >/dev/null 2>&1; then
++    PERF_ARGS=(-e cycles:u -e instructions:u)
++  fi
++fi
++
++run_case(){
++  local tag="$1" explicit="$2" log="build/m50/${tag}.log" pf="build/m50/${tag}.perf"
++  local -a E=(DSASM_GOLDEN_COS=0.999 DSASM_GOLDEN_SNR=25 DSASM_PROFILE_SHAPES=0)
++  if [[ "$explicit" == 1 ]]; then
++    E+=(DSASM_PARALLEL_ADD=0 DSASM_CONVT_S8K16=1 DSASM_VNNI=k11 DSASM_VNNI_ASYM=0 DSASM_VNNI_CIN=128
++       DSASM_KSPEC=0 DSASM_K3_TMODE=24 DSASM_K7_T24=1 DSASM_K11_T24=1
++       DSASM_RANGE_T24=0 DSASM_VOCODER_T_TILE=504 DSASM_RESIDUAL_T24=1)
++  else
++    # Prove the release defaults work without the tuning variables.
++    unset DSASM_PARALLEL_ADD DSASM_CONVT_S8K16 DSASM_VNNI DSASM_VNNI_ASYM DSASM_VNNI_CIN \
++          DSASM_KSPEC DSASM_K3_TMODE DSASM_K7_T24 DSASM_K11_T24 DSASM_RANGE_T24 \
++          DSASM_VOCODER_T_TILE DSASM_RESIDUAL_T24 || true
++  fi
++  printf '\n========== M50 %s explicit=%s ==========\n' "$tag" "$explicit"
++  if ((${#PERF_ARGS[@]})); then
++    env "${E[@]}" perf stat -x, -o "$pf" "${PERF_ARGS[@]}" -- \
++      ./build/dsasm-vocoder-m40 infer "$BUNDLE" --mel "$MEL" --f0 "$F0" \
++        --out "build/m50/${tag}.f32" --golden "$GOLD" --workers 8 --rounds 7 2>&1 | tee "$log"
++  else
++    : > "$pf"
++    env "${E[@]}" ./build/dsasm-vocoder-m40 infer "$BUNDLE" --mel "$MEL" --f0 "$F0" \
++      --out "build/m50/${tag}.f32" --golden "$GOLD" --workers 8 --rounds 7 2>&1 | tee "$log"
++  fi
++}
++run_case defaults_a 0
++run_case explicit_a 1
++run_case explicit_b 1
++run_case defaults_b 0
++
++printf '\n========== M50 DEFAULT/EXPLICIT BIT PARITY ==========\n'
++"$PY" - <<'PY2'
++import numpy as np
++from pathlib import Path
++pairs=[('defaults_a','explicit_a'),('defaults_b','explicit_b')]
++for a,b in pairs:
++    x=np.fromfile(Path('build/m50')/(a+'.f32'),np.float32)
++    y=np.fromfile(Path('build/m50')/(b+'.f32'),np.float32)
++    if x.shape!=y.shape: raise SystemExit(f'shape mismatch {a} {b}')
++    d=np.abs(x-y); bit=np.count_nonzero(x.view(np.uint32)!=y.view(np.uint32))
++    print(f'{a} vs {b}: max_abs={d.max(initial=0):.9g} bitdiff={bit}')
++    if bit: raise SystemExit(3)
++PY2
++
++printf '\n========== M50 RELEASE PROFILE ==========\n'
++env DSASM_PROFILE_SHAPES=1 DSASM_GOLDEN_COS=0.999 DSASM_GOLDEN_SNR=25 \
++  ./build/dsasm-vocoder-m40 infer "$BUNDLE" --mel "$MEL" --f0 "$F0" \
++    --out build/m50/profile.f32 --golden "$GOLD" --workers 8 --rounds 9 --profile 2>&1 | tee build/m50/profile.log
++
++ACOUSTIC=build/m42_acoustic
++if [[ ! -f "$ACOUSTIC/model.json" ]]; then
++  rm -rf "$ACOUSTIC"
++  "$PY" tools/pack_acoustic_onnx_m25.py "$MODEL/acoustic.onnx" --model-dir "$MODEL" --out "$ACOUSTIC"
++fi
++printf '\n========== M50 TRUE E2E / STEADY-STATE DEFAULT PROFILE ==========\n'
++: > build/m50/e2e_summary.tsv
++for i in 1 2 3; do
++  work="build/m50_e2e_$i"; log="build/m50/e2e_$i.log"
++  rm -rf "$work"
++  printf '\n----- M50 E2E run %s/3 -----\n' "$i"
++  # No tuning env here except quality gates. run_native_e2e no longer forces KSPEC.
++  env DSASM_GOLDEN_COS=0.999 DSASM_GOLDEN_SNR=25 \
++    "$PY" tools/run_native_e2e_m40_1.py \
++      --packed-acoustic "$ACOUSTIC" --acoustic-cli ./build/dsasm-acoustic \
++      --vocoder-bundle "$BUNDLE" --vocoder-cli ./build/dsasm-vocoder-m40 \
++      --vocoder-onnx "$MODEL/dsvocoder/nsf_hifigan.onnx" \
++      --speaker-emb "$MODEL/dongfangzhizi-nectar-xiao.emb" \
++      --language-id 4 --depth 0.6 --steps 4 --workers 8 --rounds "${M50_E2E_ROUNDS:-11}" \
++      --modes k11 --work "$work" 2>&1 | tee "$log"
++  line=$(grep 'M40.1 PURE CPU/C/ASM E2E' "$log" | tail -1 || true)
++  total=$(printf '%s\n' "$line" | sed -n 's/.*total=\([0-9.]*\) ms.*/\1/p')
++  rtf=$(printf '%s\n' "$line" | sed -n 's/.*RTF=\([0-9.]*\).*/\1/p')
++  acoustic=$(printf '%s\n' "$line" | sed -n 's/.*acoustic=\([0-9.]*\).*/\1/p')
++  vocoder=$(printf '%s\n' "$line" | sed -n 's/.*vocoder=\([0-9.]*\).*/\1/p')
++  printf '%s\t%s\t%s\t%s\t%s\n' "$i" "$acoustic" "$vocoder" "$total" "$rtf" >> build/m50/e2e_summary.tsv
++  sleep "${M50_SETTLE_SECONDS:-2}"
++done
++
++printf '\n========== M50 STEADY E2E SUMMARY ==========\n'
++"$PY" - <<'PY3'
++from pathlib import Path
++from statistics import median
++rows=[]
++for l in Path('build/m50/e2e_summary.tsv').read_text().splitlines():
++    i,a,v,t,r=l.split('\t');rows.append((int(i),float(a),float(v),float(t),float(r)))
++for x in rows: print(f'run{x[0]} acoustic={x[1]:.3f} vocoder={x[2]:.3f} total={x[3]:.3f} RTF={x[4]:.3f}')
++r=[x[4] for x in rows];t=[x[3] for x in rows]
++print(f'median_total={median(t):.3f} ms median_RTF={median(r):.3f} worst_RTF={max(r):.3f}')
++print('stable_realtime_all3=' + ('PASS' if max(r)<1.0 else 'FAIL'))
++print('stable_engineering_0.8_all3=' + ('PASS' if max(r)<=0.8 else 'FAIL'))
++PY3
++
++printf '\n========== M50 FINAL ==========\n'
++grep -E '^  Add|^  Conv[[:space:]]|^  ConvTranspose|^  VNNI-|PURE-ASM vocoder:|parity max_abs=' build/m50/profile.log || true
++for f in build/m50/e2e_*.log; do grep -E 'M40\.1 PURE CPU/C/ASM E2E|realtime RTF|PURE-ASM vocoder:|parity max_abs=' "$f" || true; done
++printf 'release-defaults: KSPEC=0 K3=24 K7=24 K11=24 RANGE=0 TILE=504 RESIDUAL=1 VNNI=k11@Cin128 symmetric\n'
+diff -ruN a/src/runtime/aux_decoder.c b/src/runtime/aux_decoder.c
+--- a/src/runtime/aux_decoder.c	2026-09-20 21:27:03.898695017 +0000
++++ b/src/runtime/aux_decoder.c	2026-09-20 22:04:47.198367375 +0000
+@@ -19,7 +19,7 @@
+ static void p_linear(DSAsmThreadPool*p,const float*x,const float*w,const float*b,float*y,
+                      size_t M,size_t N,size_t K){
+     if(!p){ds_linear_f32_avx2_m4n16(x,w,b,y,M,N,K);return;}
+-    DSAsmJob j={DS_JOB_LINEAR,x,w,b,0,0,y,M,N,K,0,0,0,0,0};
++    DSAsmJob j={0}; j.kind=DS_JOB_LINEAR; j.x=x; j.w=w; j.b0=b; j.y=y; j.M=M; j.N=N; j.K=K;
+     ds_threadpool_run(p,&j);
+ }
+ 
+diff -ruN a/src/runtime/fs2_encoder.c b/src/runtime/fs2_encoder.c
+--- a/src/runtime/fs2_encoder.c	2026-09-20 21:27:03.898695017 +0000
++++ b/src/runtime/fs2_encoder.c	2026-09-20 22:04:47.198420059 +0000
+@@ -45,7 +45,7 @@
+ static void p_linear(DSAsmThreadPool *p,const float*x,const float*w,const float*b,float*y,
+                      size_t M,size_t N,size_t K){
+     if(!p){ds_linear_f32_avx2_m4n16(x,w,b,y,M,N,K);return;}
+-    DSAsmJob j={DS_JOB_LINEAR,x,w,b,0,0,y,M,N,K,0,0,0,0,0};
++    DSAsmJob j={0}; j.kind=DS_JOB_LINEAR; j.x=x; j.w=w; j.b0=b; j.y=y; j.M=M; j.N=N; j.K=K;
+     ds_threadpool_run(p,&j);
+ }
+ 
+diff -ruN a/src/runtime/lynxnet2.c b/src/runtime/lynxnet2.c
+--- a/src/runtime/lynxnet2.c	2026-09-20 21:27:03.902694988 +0000
++++ b/src/runtime/lynxnet2.c	2026-09-20 22:04:47.198481466 +0000
+@@ -29,19 +29,19 @@
+ 
+ static void p_linear(DSAsmThreadPool *p,const float*x,const float*w,const float*b,float*y,size_t M,size_t N,size_t K){
+     if(!p){ds_linear_f32_avx2_m4n16(x,w,b,y,M,N,K);return;}
+-    DSAsmJob j={DS_JOB_LINEAR,x,w,b,0,0,y,M,N,K,0,0,0,0,0};ds_threadpool_run(p,&j);
++    DSAsmJob j={0};j.kind=DS_JOB_LINEAR;j.x=x;j.w=w;j.b0=b;j.y=y;j.M=M;j.N=N;j.K=K;ds_threadpool_run(p,&j);
+ }
+ static void p_linear_res(DSAsmThreadPool *p,const float*x,const float*w,const float*b,const float*r,float*y,size_t M,size_t N,size_t K){
+     if(!p){ds_linear_residual_f32_avx2_m4n16(x,w,b,r,y,M,N,K);return;}
+-    DSAsmJob j={DS_JOB_LINEAR_RESIDUAL,x,w,b,0,r,y,M,N,K,0,0,0,0,0};ds_threadpool_run(p,&j);
++    DSAsmJob j={0};j.kind=DS_JOB_LINEAR_RESIDUAL;j.x=x;j.w=w;j.b0=b;j.residual=r;j.y=y;j.M=M;j.N=N;j.K=K;ds_threadpool_run(p,&j);
+ }
+ static void p_softsign(DSAsmThreadPool *p,const float*x,const float*w,const float*bl,const float*bg,float*y,size_t M,size_t N,size_t K){
+     if(!p){ds_fused_linear_softsign_glu_f32_avx2_m4n8(x,w,bl,bg,y,M,N,K);return;}
+-    DSAsmJob j={DS_JOB_SOFTSIGN_GLU,x,w,bl,bg,0,y,M,N,K,0,0,0,0,0};ds_threadpool_run(p,&j);
++    DSAsmJob j={0};j.kind=DS_JOB_SOFTSIGN_GLU;j.x=x;j.w=w;j.b0=bl;j.b1=bg;j.y=y;j.M=M;j.N=N;j.K=K;ds_threadpool_run(p,&j);
+ }
+ static void p_depthwise(DSAsmThreadPool *p,const float*x,const float*w,const float*b,float*y,size_t T,size_t C){
+     if(p && ds_threadpool_get_parallel_depthwise(p) && T>=31 && C>=512){
+-        DSAsmJob j={DS_JOB_DEPTHWISE_K31,x,w,b,0,0,y,T,C,0,0,0,0,0,0};
++        DSAsmJob j={0};j.kind=DS_JOB_DEPTHWISE_K31;j.x=x;j.w=w;j.b0=b;j.y=y;j.M=T;j.N=C;
+         ds_threadpool_run(p,&j);
+     } else {
+         ds_depthwise_conv1d_k31_tc_f32_avx2(x,w,b,y,T,C);
+@@ -51,7 +51,7 @@
+                           float*tmp2n,float*y,size_t M,size_t N,size_t K){
+     if(p && ds_threadpool_get_2d(p) && ds_threadpool_get_atan_pipeline(p) &&
+        M>=8 && N>=128 && K>=128 && (N%16)==0) {
+-        DSAsmJob j={DS_JOB_ATAN_GLU_LINEAR,x,w,b,0,0,y,M,N,K,0,0,0,0,0};
++        DSAsmJob j={0};j.kind=DS_JOB_ATAN_GLU_LINEAR;j.x=x;j.w=w;j.b0=b;j.y=y;j.M=M;j.N=N;j.K=K;
+         ds_threadpool_run(p,&j);
+         return;
+     }
+diff -ruN a/src/runtime/threadpool.c b/src/runtime/threadpool.c
+--- a/src/runtime/threadpool.c	2026-09-20 21:58:14.880092624 +0000
++++ b/src/runtime/threadpool.c	2026-09-20 22:05:04.765391648 +0000
+@@ -15,7 +15,7 @@
+ #define DSASM_MAX_N_TILE 256u
+ #define DSASM_DEFAULT_M_TILE 16u
+ #define DSASM_DEFAULT_N_TILE 128u
+-#define DSASM_VOCODER_T_TILE_DEFAULT 512u
++#define DSASM_VOCODER_T_TILE_DEFAULT 504u
+ 
+ static size_t vocoder_t_tile(void){
+     static size_t cached=0;
+@@ -27,6 +27,23 @@
+     return cached=(size_t)v;
+ }
+ 
++/* M50 release profile: the perf-guided M45-M49 winners become defaults.
++   Environment variables remain explicit escape hatches for A/B and fallback. */
++static int env_bool_default(const char *name,int def){
++    const char *e=getenv(name);
++    if(!e||!*e)return def;
++    return strcmp(e,"0")!=0 && strcmp(e,"off")!=0;
++}
++static int vocoder_residual_t24_enabled(void){static int v=-1;if(v<0)v=env_bool_default("DSASM_RESIDUAL_T24",1);return v;}
++static int vocoder_k7_t24_enabled(void){static int v=-1;if(v<0)v=env_bool_default("DSASM_K7_T24",1);return v;}
++static int vocoder_k11_t24_enabled(void){static int v=-1;if(v<0)v=env_bool_default("DSASM_K11_T24",1);return v;}
++static int vocoder_k3_tmode(void){
++    static int v=-1;if(v>=0)return v;
++    const char *e=getenv("DSASM_K3_TMODE");
++    if(!e||!*e)return v=24;
++    int x=atoi(e);return v=(x==16||x==24)?x:0;
++}
++
+ struct DSAsmThreadPool;
+ typedef struct { struct DSAsmThreadPool *pool; size_t id; } WorkerArg;
+ 
+@@ -186,14 +203,10 @@
+             const size_t block_floats=j->K*j->P*pack;
+             if(pack==8u) {
+                 if(j->residual) {
+-                    const char *rte=getenv("DSASM_RESIDUAL_T24");
+-                    const int rt24=rte && strcmp(rte,"0")!=0 && (j->M%24u)==0;
+-                    const char *k3e=getenv("DSASM_K3_TMODE");
+-                    const char *k7e=getenv("DSASM_K7_T24");
+-                    const char *k11e=getenv("DSASM_K11_T24");
+-                    const int k3mode=k3e?atoi(k3e):0;
+-                    const int k7t24=(k7e && strcmp(k7e,"0")!=0);
+-                    const int k11t24=(k11e && strcmp(k11e,"0")!=0);
++                    const int rt24=vocoder_residual_t24_enabled() && (j->M%24u)==0;
++                    const int k3mode=vocoder_k3_tmode();
++                    const int k7t24=vocoder_k7_t24_enabled();
++                    const int k11t24=vocoder_k11_t24_enabled();
+                     if(rt24 && j->P==3u && k3mode==24)
+                         ds_conv1d_nct_f32_avx2_oc4_t24_k3_residual(
+                             j->x,j->w+b0*block_floats,j->b0+c0,j->y+c0*j->M,
+@@ -211,12 +224,9 @@
+                             j->x, j->w+b0*block_floats, j->b0+c0, j->y+c0*j->M,
+                             j->K, ct, j->P, j->M, j->Q, j->R, j->residual+c0*j->M);
+                 } else {
+-                    const char *k3e=getenv("DSASM_K3_TMODE");
+-                    const char *k7e=getenv("DSASM_K7_T24");
+-                    const char *k11e=getenv("DSASM_K11_T24");
+-                    const int k3mode=k3e?atoi(k3e):0;
+-                    const int k7t24=(k7e && strcmp(k7e,"0")!=0);
+-                    const int k11t24=(k11e && strcmp(k11e,"0")!=0);
++                    const int k3mode=vocoder_k3_tmode();
++                    const int k7t24=vocoder_k7_t24_enabled();
++                    const int k11t24=vocoder_k11_t24_enabled();
+                     if(k3mode==24 && (j->M%24u)==0 && j->P==3u)
+                         ds_conv1d_nct_f32_avx2_oc4_t24_k3(
+                             j->x, j->w+b0*block_floats, j->b0+c0, j->y+c0*j->M,
+diff -ruN a/src/runtime/vocoder_conv.c b/src/runtime/vocoder_conv.c
+--- a/src/runtime/vocoder_conv.c	2026-09-20 21:51:21.265614891 +0000
++++ b/src/runtime/vocoder_conv.c	2026-09-20 22:04:47.198229218 +0000
+@@ -11,6 +11,14 @@
+     return mode;
+ }
+ 
++/* M50 release defaults, derived from M45-M49 perf-guided A/B. */
++static int env_bool_default(const char *name,int def){const char *e=getenv(name);if(!e||!*e)return def;return strcmp(e,"0")!=0 && strcmp(e,"off")!=0;}
++static int kspec_enabled(void){static int v=-1;if(v<0)v=env_bool_default("DSASM_KSPEC",0);return v;}
++static int range_t24_enabled(void){static int v=-1;if(v<0)v=env_bool_default("DSASM_RANGE_T24",0);return v;}
++static int k7_t24_enabled(void){static int v=-1;if(v<0)v=env_bool_default("DSASM_K7_T24",1);return v;}
++static int k11_t24_enabled(void){static int v=-1;if(v<0)v=env_bool_default("DSASM_K11_T24",1);return v;}
++static int k3_tmode(void){static int v=-1;if(v>=0)return v;const char *e=getenv("DSASM_K3_TMODE");if(!e||!*e)return v=24;int x=atoi(e);return v=(x==16||x==24)?x:0;}
++
+ static void run_padded_conv(
+     const float *x_padded, const float *w_packed, const float *bias,
+     const float *residual, float *y,
+@@ -23,19 +31,13 @@
+         j.x=x_padded;j.w=w_packed;j.b0=bias;j.residual=residual;j.y=y;
+         j.M=Tout;j.N=Cout;j.K=Cin;
+         j.P=K;j.Q=Tp;j.R=dilation;j.S=pack_width;
+-        const char *ke=getenv("DSASM_KSPEC");
+-        const char *re=getenv("DSASM_RANGE_T24");
+-        j.T=((ke && strcmp(ke,"0")!=0)?1u:0u) | ((re && strcmp(re,"0")!=0)?2u:0u);
++        j.T=(kspec_enabled()?1u:0u) | (range_t24_enabled()?2u:0u);
+         ds_threadpool_run(pool,&j);
+     }else if(pack_width==8){
+-        const char *ke=getenv("DSASM_KSPEC");
+-        const char *k3e=getenv("DSASM_K3_TMODE");
+-        const char *k7e=getenv("DSASM_K7_T24");
+-        const char *k11e=getenv("DSASM_K11_T24");
+-        const int k3mode=k3e?atoi(k3e):0;
+-        const int ks=(ke && strcmp(ke,"0")!=0) && !residual && (Tout%8u)==0;
+-        const int k7t24=(k7e && strcmp(k7e,"0")!=0) && !residual && (Tout%24u)==0;
+-        const int k11t24=(k11e && strcmp(k11e,"0")!=0) && !residual && (Tout%24u)==0;
++        const int k3mode=k3_tmode();
++        const int ks=kspec_enabled() && !residual && (Tout%8u)==0;
++        const int k7t24=k7_t24_enabled() && !residual && (Tout%24u)==0;
++        const int k11t24=k11_t24_enabled() && !residual && (Tout%24u)==0;
+         if(residual) ds_conv1d_nct_f32_avx2_oc8_t8_residual(x_padded,w_packed,bias,y,Cin,Cout,K,Tout,Tp,dilation,residual);
+         else if(k3mode==24 && (Tout%24u)==0 && K==3u) ds_conv1d_nct_f32_avx2_oc4_t24_k3(x_padded,w_packed,bias,y,Cin,Cout,K,Tout,Tp,dilation);
+         else if(k3mode==16 && (Tout%16u)==0 && K==3u) ds_conv1d_nct_f32_avx2_oc4_t16_k3(x_padded,w_packed,bias,y,Cin,Cout,K,Tout,Tp,dilation);
+diff -ruN a/src/runtime/vocoder_graph.c b/src/runtime/vocoder_graph.c
+--- a/src/runtime/vocoder_graph.c	2026-09-20 21:58:46.611038691 +0000
++++ b/src/runtime/vocoder_graph.c	2026-09-20 22:04:47.198310695 +0000
+@@ -107,7 +107,9 @@
+ }
+ static int vnni_mode(void){
+     const char *e=getenv("DSASM_VNNI");
+-    if(!e||!strcmp(e,"0")||!strcmp(e,"off"))return 0;
++    /* M50 production default: quality-safe M40/M49 path. */
++    if(!e||!*e)return 1;
++    if(!strcmp(e,"0")||!strcmp(e,"off"))return 0;
+     if(!strcmp(e,"k11"))return 1;
+     if(!strcmp(e,"1")||!strcmp(e,"auto")||!strcmp(e,"k117")||!strcmp(e,"k7k11"))return 2;
+     return 0;
+@@ -119,7 +121,10 @@
+     if(init)return mask;
+     init=1;
+     const char *e=getenv("DSASM_VNNI_CIN");
+-    if(!e||!*e||!strcmp(e,"all")){mask=0x1fu;return mask;}
++    /* M50: only Cin=128 is quality-qualified by default.  "all" remains an
++       explicit lab opt-in for quantization experiments. */
++    if(!e||!*e){mask=1u<<3;return mask;}
++    if(!strcmp(e,"all")){mask=0x1fu;return mask;}
+     const char *p=e;
+     while(*p){
+         char *end=NULL; unsigned long v=strtoul(p,&end,10);
+diff -ruN a/tools/run_native_e2e_m40_1.py b/tools/run_native_e2e_m40_1.py
+--- a/tools/run_native_e2e_m40_1.py	2026-09-20 21:40:06.932375200 +0000
++++ b/tools/run_native_e2e_m40_1.py	2026-09-20 22:05:04.765750285 +0000
+@@ -40,7 +40,7 @@
+     audio_ms=gold.size/sr*1000.;results={}
+     for mode in [x.strip() for x in a.modes.split(',') if x.strip()]:
+         md=a.work/mode;md.mkdir(exist_ok=True)
+-        env=os.environ.copy();env.update(DSASM_VNNI=mode,DSASM_GOLDEN_COS='0.999',DSASM_GOLDEN_SNR='25');env.setdefault('DSASM_KSPEC','1')
++        env=os.environ.copy();env.update(DSASM_VNNI=mode,DSASM_GOLDEN_COS='0.999',DSASM_GOLDEN_SNR='25')
+         vcmd=[str(a.vocoder_cli),'infer',str(a.vocoder_bundle),'--mel',str(melp),'--f0',str(a.work/'f0.f32'),'--out',str(md/'native_wave.f32'),'--wav',str(md/'native_pipeline.wav'),'--golden',str(goldp),'--workers',str(a.workers),'--rounds',str(a.rounds),'--profile']
+         q=subprocess.run(vcmd,text=True,capture_output=True,env=env);print(f'\n===== M40.1 E2E DSASM_VNNI={mode} =====');print(q.stdout,end='');print(q.stderr,end='',file=sys.stderr)
+         if q.returncode:raise SystemExit(q.returncode)

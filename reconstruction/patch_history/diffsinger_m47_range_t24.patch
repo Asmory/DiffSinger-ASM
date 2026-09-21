@@ -1,0 +1,386 @@
+--- a/include/dsasm_kernels.h
++++ b/include/dsasm_kernels.h
+@@ -152,6 +152,10 @@
+     const float*,const float*,const float*,float*,size_t,size_t,size_t,size_t,size_t,size_t);
+ void ds_conv1d_nct_f32_avx2_oc4_t24_k11(
+     const float*,const float*,const float*,float*,size_t,size_t,size_t,size_t,size_t,size_t);
++void ds_conv1d_nct_f32_avx2_oc4_t24_range_k7(
++    const float*,const float*,const float*,float*,size_t,size_t,size_t,size_t,size_t,size_t,size_t);
++void ds_conv1d_nct_f32_avx2_oc4_t24_range_k11(
++    const float*,const float*,const float*,float*,size_t,size_t,size_t,size_t,size_t,size_t,size_t);
+ void ds_conv1d_nct_f32_avx2_oc8_t8_k11(
+     const float*,const float*,const float*,float*,size_t,size_t,size_t,size_t,size_t,size_t);
+ void ds_conv1d_nct_f32_avx2_oc8_t8_range_k3(
+--- a/src/kernels/x86_64/conv1d_nct_f32_avx2_oc8_t8_kspec.S
++++ b/src/kernels/x86_64/conv1d_nct_f32_avx2_oc8_t8_kspec.S
+@@ -1693,4 +1693,235 @@
+     ret
+ .size ds_conv1d_nct_f32_avx2_oc4_t24_k11,.-ds_conv1d_nct_f32_avx2_oc4_t24_k11
+ 
++
++# M47: 2-D/range variants of the proven oc4 x t24 K7/K11 kernels.
++# Signature matches the existing range kernels:
++#   x,w,b,y,Cin,K,t0,tcount,Tp,dilation,y_stride
++# Each call owns one packed8 output block and computes two oc4 halves.
++.globl ds_conv1d_nct_f32_avx2_oc4_t24_range_k7
++.type ds_conv1d_nct_f32_avx2_oc4_t24_range_k7,@function
++ds_conv1d_nct_f32_avx2_oc4_t24_range_k7:
++    push rbp
++    mov rbp, rsp
++    push rbx
++    push r12
++    push r13
++    push r14
++    push r15
++    sub rsp, 24
++
++    test r8, r8
++    jz .m47_rdone_7
++    mov r12, r8                       # Cin
++    mov r13, QWORD PTR [rbp+32]       # Tp
++    shl r13, 2                        # Tp bytes
++    mov r14, QWORD PTR [rbp+48]       # y_stride
++    shl r14, 2                        # y_stride bytes
++    mov r15, QWORD PTR [rbp+40]       # dilation
++    shl r15, 2                        # dilation bytes
++    mov r10, QWORD PTR [rbp+16]       # t0
++    mov rbx, QWORD PTR [rbp+24]       # tcount
++    test rbx, rbx
++    jz .m47_rdone_7
++    mov QWORD PTR [rsp+0], rdi        # original x
++    mov QWORD PTR [rsp+8], r10        # t0
++    add rbx, r10
++    mov QWORD PTR [rsp+16], rbx       # tend
++
++    xor r8d, r8d                      # packed-lane byte offset: 0 / 16
++.m47_rhalf_7:
++    mov r10, QWORD PTR [rsp+8]
++.m47_rt_7:
++    cmp r10, QWORD PTR [rsp+16]
++    jae .m47_rnext_half_7
++
++    lea rdi, [rdx+r8]
++    vbroadcastss ymm0, DWORD PTR [rdi+0]
++    vmovaps ymm1, ymm0
++    vmovaps ymm2, ymm0
++    vbroadcastss ymm3, DWORD PTR [rdi+4]
++    vmovaps ymm4, ymm3
++    vmovaps ymm5, ymm3
++    vbroadcastss ymm6, DWORD PTR [rdi+8]
++    vmovaps ymm7, ymm6
++    vmovaps ymm8, ymm6
++    vbroadcastss ymm9, DWORD PTR [rdi+12]
++    vmovaps ymm10, ymm9
++    vmovaps ymm11, ymm9
++
++    mov r11, QWORD PTR [rsp+0]
++    lea r11, [r11+r10*4]
++    mov rax, rsi
++    add rax, r8
++    mov r9, r12
++.m47_rci_7:
++    mov rdi, r11
++    M45_K7_STEP
++    M45_K7_STEP
++    M45_K7_STEP
++    M45_K7_STEP
++    M45_K7_STEP
++    M45_K7_STEP
++    M45_K7_STEP
++    add r11, r13
++    dec r9
++    jnz .m47_rci_7
++
++    mov rdi, r8
++    shr rdi, 2                        # 0 or 4 output channels
++    imul rdi, r14                     # byte offset to first channel of half
++    add rdi, rcx
++    lea rdi, [rdi+r10*4]
++
++    vmovups YMMWORD PTR [rdi+0], ymm0
++    vmovups YMMWORD PTR [rdi+32], ymm1
++    vmovups YMMWORD PTR [rdi+64], ymm2
++    add rdi, r14
++    vmovups YMMWORD PTR [rdi+0], ymm3
++    vmovups YMMWORD PTR [rdi+32], ymm4
++    vmovups YMMWORD PTR [rdi+64], ymm5
++    add rdi, r14
++    vmovups YMMWORD PTR [rdi+0], ymm6
++    vmovups YMMWORD PTR [rdi+32], ymm7
++    vmovups YMMWORD PTR [rdi+64], ymm8
++    add rdi, r14
++    vmovups YMMWORD PTR [rdi+0], ymm9
++    vmovups YMMWORD PTR [rdi+32], ymm10
++    vmovups YMMWORD PTR [rdi+64], ymm11
++
++    add r10, 24
++    jmp .m47_rt_7
++
++.m47_rnext_half_7:
++    add r8, 16
++    cmp r8, 32
++    jb .m47_rhalf_7
++
++.m47_rdone_7:
++    vzeroupper
++    add rsp, 24
++    pop r15
++    pop r14
++    pop r13
++    pop r12
++    pop rbx
++    pop rbp
++    ret
++.size ds_conv1d_nct_f32_avx2_oc4_t24_range_k7,.-ds_conv1d_nct_f32_avx2_oc4_t24_range_k7
++
++.globl ds_conv1d_nct_f32_avx2_oc4_t24_range_k11
++.type ds_conv1d_nct_f32_avx2_oc4_t24_range_k11,@function
++ds_conv1d_nct_f32_avx2_oc4_t24_range_k11:
++    push rbp
++    mov rbp, rsp
++    push rbx
++    push r12
++    push r13
++    push r14
++    push r15
++    sub rsp, 24
++
++    test r8, r8
++    jz .m47_rdone_11
++    mov r12, r8                       # Cin
++    mov r13, QWORD PTR [rbp+32]       # Tp
++    shl r13, 2
++    mov r14, QWORD PTR [rbp+48]       # y_stride
++    shl r14, 2
++    mov r15, QWORD PTR [rbp+40]       # dilation
++    shl r15, 2
++    mov r10, QWORD PTR [rbp+16]       # t0
++    mov rbx, QWORD PTR [rbp+24]       # tcount
++    test rbx, rbx
++    jz .m47_rdone_11
++    mov QWORD PTR [rsp+0], rdi
++    mov QWORD PTR [rsp+8], r10
++    add rbx, r10
++    mov QWORD PTR [rsp+16], rbx
++
++    xor r8d, r8d
++.m47_rhalf_11:
++    mov r10, QWORD PTR [rsp+8]
++.m47_rt_11:
++    cmp r10, QWORD PTR [rsp+16]
++    jae .m47_rnext_half_11
++
++    lea rdi, [rdx+r8]
++    vbroadcastss ymm0, DWORD PTR [rdi+0]
++    vmovaps ymm1, ymm0
++    vmovaps ymm2, ymm0
++    vbroadcastss ymm3, DWORD PTR [rdi+4]
++    vmovaps ymm4, ymm3
++    vmovaps ymm5, ymm3
++    vbroadcastss ymm6, DWORD PTR [rdi+8]
++    vmovaps ymm7, ymm6
++    vmovaps ymm8, ymm6
++    vbroadcastss ymm9, DWORD PTR [rdi+12]
++    vmovaps ymm10, ymm9
++    vmovaps ymm11, ymm9
++
++    mov r11, QWORD PTR [rsp+0]
++    lea r11, [r11+r10*4]
++    mov rax, rsi
++    add rax, r8
++    mov r9, r12
++.m47_rci_11:
++    mov rdi, r11
++    M46_K11_STEP
++    M46_K11_STEP
++    M46_K11_STEP
++    M46_K11_STEP
++    M46_K11_STEP
++    M46_K11_STEP
++    M46_K11_STEP
++    M46_K11_STEP
++    M46_K11_STEP
++    M46_K11_STEP
++    M46_K11_STEP
++    add r11, r13
++    dec r9
++    jnz .m47_rci_11
++
++    mov rdi, r8
++    shr rdi, 2
++    imul rdi, r14
++    add rdi, rcx
++    lea rdi, [rdi+r10*4]
++
++    vmovups YMMWORD PTR [rdi+0], ymm0
++    vmovups YMMWORD PTR [rdi+32], ymm1
++    vmovups YMMWORD PTR [rdi+64], ymm2
++    add rdi, r14
++    vmovups YMMWORD PTR [rdi+0], ymm3
++    vmovups YMMWORD PTR [rdi+32], ymm4
++    vmovups YMMWORD PTR [rdi+64], ymm5
++    add rdi, r14
++    vmovups YMMWORD PTR [rdi+0], ymm6
++    vmovups YMMWORD PTR [rdi+32], ymm7
++    vmovups YMMWORD PTR [rdi+64], ymm8
++    add rdi, r14
++    vmovups YMMWORD PTR [rdi+0], ymm9
++    vmovups YMMWORD PTR [rdi+32], ymm10
++    vmovups YMMWORD PTR [rdi+64], ymm11
++
++    add r10, 24
++    jmp .m47_rt_11
++
++.m47_rnext_half_11:
++    add r8, 16
++    cmp r8, 32
++    jb .m47_rhalf_11
++
++.m47_rdone_11:
++    vzeroupper
++    add rsp, 24
++    pop r15
++    pop r14
++    pop r13
++    pop r12
++    pop rbx
++    pop rbp
++    ret
++.size ds_conv1d_nct_f32_avx2_oc4_t24_range_k11,.-ds_conv1d_nct_f32_avx2_oc4_t24_range_k11
++
+ .section .note.GNU-stack,"",@progbits
+--- a/src/runtime/threadpool.c
++++ b/src/runtime/threadpool.c
+@@ -15,7 +15,17 @@
+ #define DSASM_MAX_N_TILE 256u
+ #define DSASM_DEFAULT_M_TILE 16u
+ #define DSASM_DEFAULT_N_TILE 128u
+-#define DSASM_VOCODER_T_TILE 512u
++#define DSASM_VOCODER_T_TILE_DEFAULT 512u
++
++static size_t vocoder_t_tile(void){
++    static size_t cached=0;
++    if(cached) return cached;
++    const char *e=getenv("DSASM_VOCODER_T_TILE");
++    if(!e||!*e) return cached=DSASM_VOCODER_T_TILE_DEFAULT;
++    char *end=0; unsigned long v=strtoul(e,&end,10);
++    if(end==e || *end || v<24ul || (v%8ul)!=0ul) return cached=DSASM_VOCODER_T_TILE_DEFAULT;
++    return cached=(size_t)v;
++}
+ 
+ struct DSAsmThreadPool;
+ typedef struct { struct DSAsmThreadPool *pool; size_t id; } WorkerArg;
+@@ -283,7 +293,8 @@
+     if(!job_use_2d(p,j)) return p->n;
+     if(j->kind==DS_JOB_VOCODER_CONV1D){
+         const size_t blocks=j->N/8u;
+-        const size_t tt=(j->M+DSASM_VOCODER_T_TILE-1u)/DSASM_VOCODER_T_TILE;
++        const size_t tile=vocoder_t_tile();
++        const size_t tt=(j->M+tile-1u)/tile;
+         return blocks*tt;
+     }
+     if(job_use_n_owner(p,j)){
+@@ -358,22 +369,29 @@
+         (void)p;(void)worker_id;
+         const size_t pack=8u;
+         const size_t blocks=j->N/pack;
+-        const size_t tt=(j->M+DSASM_VOCODER_T_TILE-1u)/DSASM_VOCODER_T_TILE;
++        const size_t tile=vocoder_t_tile();
++        const size_t tt=(j->M+tile-1u)/tile;
+         const size_t ob=task/tt, ti=task%tt;
+         if(ob>=blocks) return;
+-        const size_t t0=ti*DSASM_VOCODER_T_TILE;
+-        size_t tc=j->M-t0; if(tc>DSASM_VOCODER_T_TILE)tc=DSASM_VOCODER_T_TILE;
++        const size_t t0=ti*tile;
++        size_t tc=j->M-t0; if(tc>tile)tc=tile;
+         const size_t block_floats=j->K*j->P*pack;
+         if(j->residual) ds_conv1d_nct_f32_avx2_oc8_t8_range_residual(
+             j->x,j->w+ob*block_floats,j->b0+ob*pack,j->y+ob*pack*j->M,
+             j->K,j->P,t0,tc,j->Q,j->R,j->M,j->residual+ob*pack*j->M);
+-        else if(j->T && (t0%8u)==0 && (tc%8u)==0 && j->P==3u) ds_conv1d_nct_f32_avx2_oc8_t8_range_k3(
++        else if((j->T&2u) && (t0%24u)==0 && (tc%24u)==0 && j->P==7u) ds_conv1d_nct_f32_avx2_oc4_t24_range_k7(
++            j->x,j->w+ob*block_floats,j->b0+ob*pack,j->y+ob*pack*j->M,
++            j->K,j->P,t0,tc,j->Q,j->R,j->M);
++        else if((j->T&2u) && (t0%24u)==0 && (tc%24u)==0 && j->P==11u) ds_conv1d_nct_f32_avx2_oc4_t24_range_k11(
++            j->x,j->w+ob*block_floats,j->b0+ob*pack,j->y+ob*pack*j->M,
++            j->K,j->P,t0,tc,j->Q,j->R,j->M);
++        else if((j->T&1u) && (t0%8u)==0 && (tc%8u)==0 && j->P==3u) ds_conv1d_nct_f32_avx2_oc8_t8_range_k3(
+             j->x,j->w+ob*block_floats,j->b0+ob*pack,j->y+ob*pack*j->M,
+             j->K,j->P,t0,tc,j->Q,j->R,j->M);
+-        else if(j->T && (t0%8u)==0 && (tc%8u)==0 && j->P==7u) ds_conv1d_nct_f32_avx2_oc8_t8_range_k7(
++        else if((j->T&1u) && (t0%8u)==0 && (tc%8u)==0 && j->P==7u) ds_conv1d_nct_f32_avx2_oc8_t8_range_k7(
+             j->x,j->w+ob*block_floats,j->b0+ob*pack,j->y+ob*pack*j->M,
+             j->K,j->P,t0,tc,j->Q,j->R,j->M);
+-        else if(j->T && (t0%8u)==0 && (tc%8u)==0 && j->P==11u) ds_conv1d_nct_f32_avx2_oc8_t8_range_k11(
++        else if((j->T&1u) && (t0%8u)==0 && (tc%8u)==0 && j->P==11u) ds_conv1d_nct_f32_avx2_oc8_t8_range_k11(
+             j->x,j->w+ob*block_floats,j->b0+ob*pack,j->y+ob*pack*j->M,
+             j->K,j->P,t0,tc,j->Q,j->R,j->M);
+         else ds_conv1d_nct_f32_avx2_oc8_t8_range(
+--- a/src/runtime/vocoder_conv.c
++++ b/src/runtime/vocoder_conv.c
+@@ -24,7 +24,8 @@
+         j.M=Tout;j.N=Cout;j.K=Cin;
+         j.P=K;j.Q=Tp;j.R=dilation;j.S=pack_width;
+         const char *ke=getenv("DSASM_KSPEC");
+-        j.T=(ke && strcmp(ke,"0")!=0);
++        const char *re=getenv("DSASM_RANGE_T24");
++        j.T=((ke && strcmp(ke,"0")!=0)?1u:0u) | ((re && strcmp(re,"0")!=0)?2u:0u);
+         ds_threadpool_run(pool,&j);
+     }else if(pack_width==8){
+         const char *ke=getenv("DSASM_KSPEC");
+--- /dev/null
++++ b/docs/M47_RANGE_T24_2D.md
+@@ -0,0 +1,21 @@
++# M47 — perf-guided t24 range kernels for 2-D vocoder Conv
++
++M45/M46 proved that `oc4 x t24` reduces scalar-weight broadcasts and is bit-exact
++for full K7/K11 Conv1d.  Perf still showed substantial cycles in the range kernels
++used by the 2-D scheduler (`rci_7` and `rci_11`).
++
++M47 adds bit-exact `oc4 x t24` range kernels for K7 and K11, plus a runtime-selectable
++vocoder time tile.  `DSASM_VOCODER_T_TILE=504` keeps every 2-D tile divisible by both
++24 and 8 for the real 12288/24576 late-stage lengths; `DSASM_RANGE_T24=1` enables the
++new range kernels independently of `DSASM_KSPEC`.
++
++The intended winning policy remains:
++
++- `DSASM_KSPEC=0`
++- `DSASM_K7_T24=1`
++- `DSASM_K11_T24=1`
++- test `DSASM_VOCODER_T_TILE=512/504`
++- test `DSASM_RANGE_T24=0/1`
++
++The runner separates tile geometry from kernel selection and chooses by P-core cycles
++when perf counters are available.
+--- /dev/null
++++ b/tools/test_range_t24_m47.c
+@@ -0,0 +1,29 @@
++#define _POSIX_C_SOURCE 200809L
++#include "dsasm_kernels.h"
++#include <math.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <time.h>
++static uint32_t st=0x47123456u;
++static float fr(void){st=st*1664525u+1013904223u;return ((int32_t)(st>>8))/8388608.0f;}
++static void *am(size_t n){void *p=0;return posix_memalign(&p,64,n)?0:p;}
++static double ms(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec*1e3+t.tv_nsec*1e-6;}
++typedef void(*rf)(const float*,const float*,const float*,float*,size_t,size_t,size_t,size_t,size_t,size_t,size_t);
++static int one(size_t K,size_t Cin,size_t T,size_t d,size_t t0,size_t tc,int bench){
++ const size_t pad=(K/2)*d,Tp=T+2*pad,nx=Cin*Tp,nw=Cin*K*8,ny=8*T;
++ float*x=am(nx*4),*w=am(nw*4),*b=am(8*4),*a=am(ny*4),*c=am(ny*4); if(!x||!w||!b||!a||!c)return 2;
++ memset(x,0,nx*4); for(size_t ci=0;ci<Cin;ci++)for(size_t t=0;t<T;t++)x[ci*Tp+pad+t]=.1f*fr();
++ for(size_t i=0;i<nw;i++)w[i]=.02f*fr(); for(size_t i=0;i<8;i++)b[i]=.01f*fr();
++ for(size_t i=0;i<ny;i++)a[i]=c[i]=-123.0f;
++ rf old=K==7?ds_conv1d_nct_f32_avx2_oc8_t8_range_k7:ds_conv1d_nct_f32_avx2_oc8_t8_range_k11;
++ rf neo=K==7?ds_conv1d_nct_f32_avx2_oc4_t24_range_k7:ds_conv1d_nct_f32_avx2_oc4_t24_range_k11;
++ old(x,w,b,a,Cin,K,t0,tc,Tp,d,T); neo(x,w,b,c,Cin,K,t0,tc,Tp,d,T);
++ float ma=0;double ss=0;size_t bit=0,n=0; for(size_t oc=0;oc<8;oc++)for(size_t t=t0;t<t0+tc;t++){size_t i=oc*T+t;float z=fabsf(a[i]-c[i]);if(z>ma)ma=z;ss+=(double)z*z;if(memcmp(a+i,c+i,4))bit++;n++;}
++ printf("M47 range K=%zu C=%zu T=%zu d=%zu t0=%zu tc=%zu max_abs=%.9g rmse=%.9g bitdiff=%zu\n",K,Cin,T,d,t0,tc,ma,sqrt(ss/n),bit);
++ if(ma>1e-6f||bit)return 1;
++ if(bench){enum{R=31};double ao[R],an[R];for(int r=0;r<R;r++){double q=ms();for(int z=0;z<8;z++)old(x,w,b,a,Cin,K,t0,tc,Tp,d,T);ao[r]=ms()-q;q=ms();for(int z=0;z<8;z++)neo(x,w,b,c,Cin,K,t0,tc,Tp,d,T);an[r]=ms()-q;}for(int i=0;i<R;i++)for(int j=i+1;j<R;j++){if(ao[j]<ao[i]){double z=ao[i];ao[i]=ao[j];ao[j]=z;}if(an[j]<an[i]){double z=an[i];an[i]=an[j];an[j]=z;}}printf("M47 range micro K=%zu old=%.3f ms t24=%.3f ms speedup=%.3fx\n",K,ao[R/2],an[R/2],ao[R/2]/an[R/2]);}
++ free(x);free(w);free(b);free(a);free(c);return 0;
++}
++int main(void){int r=0;r|=one(7,32,12288,1,0,504,1);r|=one(7,16,24576,5,1008,504,1);r|=one(11,32,12288,3,504,504,1);r|=one(11,16,24576,5,1008,504,1);puts(r?"M47 range t24 FAIL":"M47 range t24 parity OK");return r;}

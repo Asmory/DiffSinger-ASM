@@ -1,0 +1,842 @@
+diff -ruN '--exclude=build' '--exclude=.git' m49base/docs/M49_SELECTIVE_RESIDUAL_T24.md m49work/docs/M49_SELECTIVE_RESIDUAL_T24.md
+--- m49base/docs/M49_SELECTIVE_RESIDUAL_T24.md	1970-01-01 00:00:00.000000000 +0000
++++ m49work/docs/M49_SELECTIVE_RESIDUAL_T24.md	2026-09-20 22:00:14.360685989 +0000
+@@ -0,0 +1,17 @@
++# M49 selective residual-store t24 fusion
++
++M38 fused every eligible Conv->Add residual merge into the old oc8xt8 store
++path and regressed whole-vocoder throughput. M49 revisits the idea only after
++M45/M46/M48 established lower-instruction oc4xt24 kernels.
++
++Production experiment `--residual-scope k7ge128` fuses only K=7 Conv->Add
++pairs with Cout>=128 and T divisible by 24. These shapes stay on the full
++channel-owner path at 8 workers and local A/B showed positive fused-store
++microbench results. C64/C32/C16 and K3/K11 remain unfused.
++
++DSVOC35 flag bit 8 means the residual tensor id is stored in p[8]. This leaves
++`reserved` available for the M40 VNNI blob, so VNNI and graph residual fusion
++can coexist. If a fused op executes through VNNI, runtime performs the residual
++add after VNNI; FP32 t24 paths use the new fused residual ASM kernel.
++
++Runtime switch: `DSASM_RESIDUAL_T24=1`.
+diff -ruN '--exclude=build' '--exclude=.git' m49base/include/dsasm_kernels.h m49work/include/dsasm_kernels.h
+--- m49base/include/dsasm_kernels.h	2026-09-20 21:51:20.477861553 +0000
++++ m49work/include/dsasm_kernels.h	2026-09-20 21:58:04.190699244 +0000
+@@ -156,6 +156,13 @@
+     const float*,const float*,const float*,float*,size_t,size_t,size_t,size_t,size_t,size_t);
+ void ds_conv1d_nct_f32_avx2_oc4_t24_k11(
+     const float*,const float*,const float*,float*,size_t,size_t,size_t,size_t,size_t,size_t);
++/* M49: selective residual-store variants of the proven full t24 kernels. */
++void ds_conv1d_nct_f32_avx2_oc4_t24_k3_residual(
++    const float*,const float*,const float*,float*,size_t,size_t,size_t,size_t,size_t,size_t,const float*);
++void ds_conv1d_nct_f32_avx2_oc4_t24_k7_residual(
++    const float*,const float*,const float*,float*,size_t,size_t,size_t,size_t,size_t,size_t,const float*);
++void ds_conv1d_nct_f32_avx2_oc4_t24_k11_residual(
++    const float*,const float*,const float*,float*,size_t,size_t,size_t,size_t,size_t,size_t,const float*);
+ void ds_conv1d_nct_f32_avx2_oc4_t24_range_k7(
+     const float*,const float*,const float*,float*,size_t,size_t,size_t,size_t,size_t,size_t,size_t);
+ void ds_conv1d_nct_f32_avx2_oc4_t24_range_k11(
+diff -ruN '--exclude=build' '--exclude=.git' m49base/scripts/run_m49_residual_t24.sh m49work/scripts/run_m49_residual_t24.sh
+--- m49base/scripts/run_m49_residual_t24.sh	1970-01-01 00:00:00.000000000 +0000
++++ m49work/scripts/run_m49_residual_t24.sh	2026-09-20 22:00:14.360718532 +0000
+@@ -0,0 +1,132 @@
++#!/usr/bin/env bash
++set -euo pipefail
++export LC_ALL=C
++PROJECT="${PROJECT:-$HOME/asm/diffsinger}"
++MODEL="${MODEL:-$PROJECT/model/DongFangZhiZi_Nectar_DiffSinger_CE_26.08.31}"
++PY="${PY:-$PROJECT/.venv/bin/python}"
++cd "$PROJECT"
++mkdir -p build/m49
++
++make -j"$(nproc)" build/dsasm-vocoder-m40 build/dsasm-acoustic
++cc -O3 -march=native -Iinclude tools/test_residual_t24_m49.c \
++  build/conv1d_m39_kspec.o build/add_m33.o -lm -o build/test_residual_t24_m49
++printf '\n========== M49 RESIDUAL T24 SYNTHETIC / MICRO ==========\n'
++./build/test_residual_t24_m49
++[[ "${M49_TEST_ONLY:-0}" == 1 ]] && exit 0
++
++printf '\n========== M49 PACK BASE + SELECTIVE RESIDUAL ==========\n'
++rm -rf build/m49/packer_base build/m49/packer_res
++"$PY" tools/pack_vocoder_graph_m35.py "$MODEL/dsvocoder/nsf_hifigan.onnx" \
++  --frames 48 --vnni-scope all-k711 --residual-scope none \
++  --out build/m49/nsf_base.dsv35 --work build/m49/packer_base
++"$PY" tools/pack_vocoder_graph_m35.py "$MODEL/dsvocoder/nsf_hifigan.onnx" \
++  --frames 48 --vnni-scope all-k711 --residual-scope k7ge128 \
++  --out build/m49/nsf_res.dsv35 --work build/m49/packer_res
++BASE=build/m49/nsf_base.dsv35
++RES=build/m49/nsf_res.dsv35
++MEL=build/m49/packer_base/mel.f32
++F0=build/m49/packer_base/f0.f32
++GOLD=build/m49/packer_base/golden_wave.f32
++
++BASE_ENV=(
++  DSASM_PARALLEL_ADD=0 DSASM_CONVT_S8K16=1
++  DSASM_VNNI=k11 DSASM_VNNI_ASYM=0 DSASM_VNNI_CIN=128
++  DSASM_GOLDEN_COS=0.999 DSASM_GOLDEN_SNR=25 DSASM_PROFILE_SHAPES=0
++  DSASM_KSPEC=0 DSASM_K3_TMODE=24 DSASM_K7_T24=1 DSASM_K11_T24=1
++  DSASM_RANGE_T24=0 DSASM_VOCODER_T_TILE=504
++)
++PERF_ARGS=()
++if command -v perf >/dev/null 2>&1; then
++  if perf stat -e cpu_core/cycles/u -e cpu_core/instructions/u -- true >/dev/null 2>&1; then
++    PERF_ARGS=(-e cpu_core/cycles/u -e cpu_core/instructions/u)
++  elif perf stat -e cycles:u -e instructions:u -- true >/dev/null 2>&1; then
++    PERF_ARGS=(-e cycles:u -e instructions:u)
++  fi
++fi
++: > build/m49/cases.tsv
++run_case(){
++  local tag="$1" bundle="$2" rt="$3"
++  local log="build/m49/${tag}.log" pf="build/m49/${tag}.perf"
++  printf '\n========== M49 %s RESIDUAL_T24=%s ==========\n' "$tag" "$rt"
++  if ((${#PERF_ARGS[@]})); then
++    env "${BASE_ENV[@]}" DSASM_RESIDUAL_T24="$rt" \
++      perf stat -x, -o "$pf" "${PERF_ARGS[@]}" -- \
++      ./build/dsasm-vocoder-m40 infer "$bundle" --mel "$MEL" --f0 "$F0" \
++        --out "build/m49/${tag}.f32" --golden "$GOLD" --workers 8 --rounds 5 \
++        2>&1 | tee "$log"
++  else
++    : > "$pf"
++    env "${BASE_ENV[@]}" DSASM_RESIDUAL_T24="$rt" \
++      ./build/dsasm-vocoder-m40 infer "$bundle" --mel "$MEL" --f0 "$F0" \
++        --out "build/m49/${tag}.f32" --golden "$GOLD" --workers 8 --rounds 5 \
++        2>&1 | tee "$log"
++  fi
++  local med cyc ins
++  med=$(sed -n 's/.*median=\([0-9.]*\) ms.*/\1/p' "$log" | tail -1)
++  cyc=$(awk -F, '$3 ~ /cycles/ {gsub(/[[:space:]]/,"",$1); print $1; exit}' "$pf" 2>/dev/null || true)
++  ins=$(awk -F, '$3 ~ /instructions/ {gsub(/[[:space:]]/,"",$1); print $1; exit}' "$pf" 2>/dev/null || true)
++  [[ -z "$cyc" ]] && cyc=NA; [[ -z "$ins" ]] && ins=NA
++  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$tag" "$bundle" "$rt" "${med:-NA}" "$cyc" "$ins" >> build/m49/cases.tsv
++  printf 'M49 sample: tag=%s median=%s ms Pcycles=%s Pinsns=%s\n' "$tag" "${med:-NA}" "$cyc" "$ins"
++  sleep 1
++}
++run_case base_a "$BASE" 0
++run_case oldres_a "$RES" 0
++run_case t24res_a "$RES" 1
++run_case t24res_b "$RES" 1
++run_case oldres_b "$RES" 0
++run_case base_b "$BASE" 0
++
++printf '\n========== M49 CONTROLLED SUMMARY ==========\n'
++BEST=$("$PY" - <<'PY2'
++from pathlib import Path
++from statistics import mean
++rows={}
++for line in Path('build/m49/cases.tsv').read_text().splitlines():
++    tag,bundle,rt,med,cyc,ins=line.split('\t'); key=tag.rsplit('_',1)[0]
++    rows.setdefault(key,[]).append((bundle,rt,float(med),None if cyc=='NA' else int(cyc),None if ins=='NA' else int(ins)))
++for k,v in rows.items():
++    m=mean(x[2] for x in v); cs=[x[3] for x in v if x[3] is not None]; ii=[x[4] for x in v if x[4] is not None]
++    c=mean(cs) if cs else float('nan'); ins=mean(ii) if ii else float('nan'); ipc=ins/c if cs and ii else float('nan')
++    print(f'{k:8s} mean_median={m:.3f} ms mean_Pcycles={c:.0f} mean_Pinsns={ins:.0f} IPC={ipc:.3f} rt24={v[0][1]}')
++valid=[]
++for k,v in rows.items():
++    cs=[x[3] for x in v]
++    score=mean(cs) if all(x is not None for x in cs) else mean(x[2] for x in v)
++    valid.append((score,k,v[0][0],v[0][1]))
++_,k,b,r=min(valid)
++print(f'WINNER\t{k}\t{b}\t{r}')
++PY2
++)
++echo "$BEST"
++IFS=$'\t' read -r _ WIN_TAG WIN_BUNDLE WIN_RT <<< "$(printf '%s\n' "$BEST" | tail -1)"
++printf 'M49 winner: %s bundle=%s RESIDUAL_T24=%s\n' "$WIN_TAG" "$WIN_BUNDLE" "$WIN_RT"
++
++sleep 3
++printf '\n========== M49 WINNER PROFILE ==========\n'
++env "${BASE_ENV[@]}" DSASM_RESIDUAL_T24="$WIN_RT" DSASM_PROFILE_SHAPES=1 \
++  ./build/dsasm-vocoder-m40 infer "$WIN_BUNDLE" --mel "$MEL" --f0 "$F0" \
++    --out build/m49/winner.f32 --golden "$GOLD" --workers 8 --rounds 7 --profile \
++    2>&1 | tee build/m49/winner_profile.log
++
++ACOUSTIC=build/m42_acoustic
++if [[ ! -f "$ACOUSTIC/model.json" ]]; then
++  rm -rf "$ACOUSTIC"
++  "$PY" tools/pack_acoustic_onnx_m25.py "$MODEL/acoustic.onnx" --model-dir "$MODEL" --out "$ACOUSTIC"
++fi
++sleep "${M49_SETTLE_SECONDS:-2}"
++rm -rf build/m49_e2e
++printf '\n========== M49 TRUE E2E ==========\n'
++env "${BASE_ENV[@]}" DSASM_RESIDUAL_T24="$WIN_RT" \
++  "$PY" tools/run_native_e2e_m40_1.py \
++    --packed-acoustic "$ACOUSTIC" --acoustic-cli ./build/dsasm-acoustic \
++    --vocoder-bundle "$WIN_BUNDLE" --vocoder-cli ./build/dsasm-vocoder-m40 \
++    --vocoder-onnx "$MODEL/dsvocoder/nsf_hifigan.onnx" \
++    --speaker-emb "$MODEL/dongfangzhizi-nectar-xiao.emb" \
++    --language-id 4 --depth 0.6 --steps 4 --workers 8 --rounds "${M49_E2E_ROUNDS:-9}" \
++    --modes k11 --work build/m49_e2e 2>&1 | tee build/m49/e2e.log
++
++printf '\n========== M49 FINAL ==========\n'
++grep -E '^  Add|^  Conv[[:space:]]|^  ConvTranspose|^  VNNI-|PURE-ASM vocoder:|parity max_abs=' build/m49/winner_profile.log || true
++grep -E 'M40\.1 PURE CPU/C/ASM E2E|realtime RTF|PURE-ASM vocoder:|parity max_abs=' build/m49/e2e.log || true
++printf 'winner=%s RESIDUAL_T24=%s bundle=%s\n' "$WIN_TAG" "$WIN_RT" "$WIN_BUNDLE"
+diff -ruN '--exclude=build' '--exclude=.git' m49base/src/kernels/x86_64/conv1d_nct_f32_avx2_oc8_t8_kspec.S m49work/src/kernels/x86_64/conv1d_nct_f32_avx2_oc8_t8_kspec.S
+--- m49base/src/kernels/x86_64/conv1d_nct_f32_avx2_oc8_t8_kspec.S	2026-09-20 21:52:30.116108375 +0000
++++ m49work/src/kernels/x86_64/conv1d_nct_f32_avx2_oc8_t8_kspec.S	2026-09-20 21:58:04.191006675 +0000
+@@ -2205,3 +2205,468 @@
+     pop rbp
+     ret
+ .size ds_conv1d_nct_f32_avx2_oc4_t24_k3,.-ds_conv1d_nct_f32_avx2_oc4_t24_k3
++
++
++# M49 selective residual-store K=7: oc4 x t24, same arithmetic order as the
++# corresponding M45/M46/M48 kernel, with residual added only at the final store.
++.globl ds_conv1d_nct_f32_avx2_oc4_t24_k7_residual
++.type ds_conv1d_nct_f32_avx2_oc4_t24_k7_residual,@function
++ds_conv1d_nct_f32_avx2_oc4_t24_k7_residual:
++    push rbp
++    mov rbp, rsp
++    push rbx
++    push r12
++    push r13
++    push r14
++    push r15
++    sub rsp, 32
++    test r8, r8
++    jz .m49r7_done
++    test r9, r9
++    jz .m49r7_done
++    test r9, 7
++    jnz .m49r7_done
++    mov r12, r8
++    mov r13, QWORD PTR [rbp+24]       # Tout
++    mov r14, QWORD PTR [rbp+32]       # Tp
++    shl r14, 2
++    mov r15, QWORD PTR [rbp+40]       # dilation
++    shl r15, 2
++    mov QWORD PTR [rsp+0], rdi        # x base
++    mov rax, r12
++    imul rax, 224
++    mov QWORD PTR [rsp+8], rax        # packed bytes / oc8
++    mov rax, QWORD PTR [rbp+48]
++    mov QWORD PTR [rsp+24], rax       # residual current oc8 base
++    mov rbx, r9
++    shr rbx, 3
++.m49r7_ob:
++    xor r8d, r8d
++.m49r7_half:
++    mov rdi, r8
++    imul rdi, r13
++    add rdi, rcx
++    mov QWORD PTR [rsp+16], rdi       # y half base
++    xor r10d, r10d
++.m49r7_t:
++    cmp r10, r13
++    jae .m49r7_next_half
++    lea rdi, [rdx+r8]
++    vbroadcastss ymm0, DWORD PTR [rdi+0]
++    vmovaps ymm1, ymm0
++    vmovaps ymm2, ymm0
++    vbroadcastss ymm3, DWORD PTR [rdi+4]
++    vmovaps ymm4, ymm3
++    vmovaps ymm5, ymm3
++    vbroadcastss ymm6, DWORD PTR [rdi+8]
++    vmovaps ymm7, ymm6
++    vmovaps ymm8, ymm6
++    vbroadcastss ymm9, DWORD PTR [rdi+12]
++    vmovaps ymm10, ymm9
++    vmovaps ymm11, ymm9
++    mov r11, QWORD PTR [rsp+0]
++    lea r11, [r11+r10*4]
++    mov rax, rsi
++    add rax, r8
++    mov r9, r12
++.m49r7_ci:
++    mov rdi, r11
++    M45_K7_STEP
++    M45_K7_STEP
++    M45_K7_STEP
++    M45_K7_STEP
++    M45_K7_STEP
++    M45_K7_STEP
++    M45_K7_STEP
++    add r11, r14
++    dec r9
++    jnz .m49r7_ci
++
++    mov rdi, QWORD PTR [rsp+16]
++    lea rdi, [rdi+r10*4]
++    mov r11, r13
++    shl r11, 2
++    mov rax, QWORD PTR [rsp+24]
++    mov r9, r8
++    imul r9, r13
++    add rax, r9
++    lea rax, [rax+r10*4]
++
++    vmovups ymm12, YMMWORD PTR [rax+0]
++    vaddps ymm0, ymm0, ymm12
++    vmovups YMMWORD PTR [rdi+0], ymm0
++    vmovups ymm12, YMMWORD PTR [rax+32]
++    vaddps ymm1, ymm1, ymm12
++    vmovups YMMWORD PTR [rdi+32], ymm1
++    vmovups ymm12, YMMWORD PTR [rax+64]
++    vaddps ymm2, ymm2, ymm12
++    vmovups YMMWORD PTR [rdi+64], ymm2
++    add rdi, r11
++    add rax, r11
++    vmovups ymm12, YMMWORD PTR [rax+0]
++    vaddps ymm3, ymm3, ymm12
++    vmovups YMMWORD PTR [rdi+0], ymm3
++    vmovups ymm12, YMMWORD PTR [rax+32]
++    vaddps ymm4, ymm4, ymm12
++    vmovups YMMWORD PTR [rdi+32], ymm4
++    vmovups ymm12, YMMWORD PTR [rax+64]
++    vaddps ymm5, ymm5, ymm12
++    vmovups YMMWORD PTR [rdi+64], ymm5
++    add rdi, r11
++    add rax, r11
++    vmovups ymm12, YMMWORD PTR [rax+0]
++    vaddps ymm6, ymm6, ymm12
++    vmovups YMMWORD PTR [rdi+0], ymm6
++    vmovups ymm12, YMMWORD PTR [rax+32]
++    vaddps ymm7, ymm7, ymm12
++    vmovups YMMWORD PTR [rdi+32], ymm7
++    vmovups ymm12, YMMWORD PTR [rax+64]
++    vaddps ymm8, ymm8, ymm12
++    vmovups YMMWORD PTR [rdi+64], ymm8
++    add rdi, r11
++    add rax, r11
++    vmovups ymm12, YMMWORD PTR [rax+0]
++    vaddps ymm9, ymm9, ymm12
++    vmovups YMMWORD PTR [rdi+0], ymm9
++    vmovups ymm12, YMMWORD PTR [rax+32]
++    vaddps ymm10, ymm10, ymm12
++    vmovups YMMWORD PTR [rdi+32], ymm10
++    vmovups ymm12, YMMWORD PTR [rax+64]
++    vaddps ymm11, ymm11, ymm12
++    vmovups YMMWORD PTR [rdi+64], ymm11
++
++    add r10, 24
++    jmp .m49r7_t
++.m49r7_next_half:
++    add r8, 16
++    cmp r8, 32
++    jb .m49r7_half
++    add rsi, QWORD PTR [rsp+8]
++    add rdx, 32
++    mov rax, r13
++    shl rax, 5
++    add rcx, rax
++    add QWORD PTR [rsp+24], rax
++    dec rbx
++    jnz .m49r7_ob
++.m49r7_done:
++    vzeroupper
++    add rsp, 32
++    pop r15
++    pop r14
++    pop r13
++    pop r12
++    pop rbx
++    pop rbp
++    ret
++.size ds_conv1d_nct_f32_avx2_oc4_t24_k7_residual,.-ds_conv1d_nct_f32_avx2_oc4_t24_k7_residual
++
++
++# M49 selective residual-store K=11: oc4 x t24, same arithmetic order as the
++# corresponding M45/M46/M48 kernel, with residual added only at the final store.
++.globl ds_conv1d_nct_f32_avx2_oc4_t24_k11_residual
++.type ds_conv1d_nct_f32_avx2_oc4_t24_k11_residual,@function
++ds_conv1d_nct_f32_avx2_oc4_t24_k11_residual:
++    push rbp
++    mov rbp, rsp
++    push rbx
++    push r12
++    push r13
++    push r14
++    push r15
++    sub rsp, 32
++    test r8, r8
++    jz .m49r11_done
++    test r9, r9
++    jz .m49r11_done
++    test r9, 7
++    jnz .m49r11_done
++    mov r12, r8
++    mov r13, QWORD PTR [rbp+24]       # Tout
++    mov r14, QWORD PTR [rbp+32]       # Tp
++    shl r14, 2
++    mov r15, QWORD PTR [rbp+40]       # dilation
++    shl r15, 2
++    mov QWORD PTR [rsp+0], rdi        # x base
++    mov rax, r12
++    imul rax, 352
++    mov QWORD PTR [rsp+8], rax        # packed bytes / oc8
++    mov rax, QWORD PTR [rbp+48]
++    mov QWORD PTR [rsp+24], rax       # residual current oc8 base
++    mov rbx, r9
++    shr rbx, 3
++.m49r11_ob:
++    xor r8d, r8d
++.m49r11_half:
++    mov rdi, r8
++    imul rdi, r13
++    add rdi, rcx
++    mov QWORD PTR [rsp+16], rdi       # y half base
++    xor r10d, r10d
++.m49r11_t:
++    cmp r10, r13
++    jae .m49r11_next_half
++    lea rdi, [rdx+r8]
++    vbroadcastss ymm0, DWORD PTR [rdi+0]
++    vmovaps ymm1, ymm0
++    vmovaps ymm2, ymm0
++    vbroadcastss ymm3, DWORD PTR [rdi+4]
++    vmovaps ymm4, ymm3
++    vmovaps ymm5, ymm3
++    vbroadcastss ymm6, DWORD PTR [rdi+8]
++    vmovaps ymm7, ymm6
++    vmovaps ymm8, ymm6
++    vbroadcastss ymm9, DWORD PTR [rdi+12]
++    vmovaps ymm10, ymm9
++    vmovaps ymm11, ymm9
++    mov r11, QWORD PTR [rsp+0]
++    lea r11, [r11+r10*4]
++    mov rax, rsi
++    add rax, r8
++    mov r9, r12
++.m49r11_ci:
++    mov rdi, r11
++    M46_K11_STEP
++    M46_K11_STEP
++    M46_K11_STEP
++    M46_K11_STEP
++    M46_K11_STEP
++    M46_K11_STEP
++    M46_K11_STEP
++    M46_K11_STEP
++    M46_K11_STEP
++    M46_K11_STEP
++    M46_K11_STEP
++    add r11, r14
++    dec r9
++    jnz .m49r11_ci
++
++    mov rdi, QWORD PTR [rsp+16]
++    lea rdi, [rdi+r10*4]
++    mov r11, r13
++    shl r11, 2
++    mov rax, QWORD PTR [rsp+24]
++    mov r9, r8
++    imul r9, r13
++    add rax, r9
++    lea rax, [rax+r10*4]
++
++    vmovups ymm12, YMMWORD PTR [rax+0]
++    vaddps ymm0, ymm0, ymm12
++    vmovups YMMWORD PTR [rdi+0], ymm0
++    vmovups ymm12, YMMWORD PTR [rax+32]
++    vaddps ymm1, ymm1, ymm12
++    vmovups YMMWORD PTR [rdi+32], ymm1
++    vmovups ymm12, YMMWORD PTR [rax+64]
++    vaddps ymm2, ymm2, ymm12
++    vmovups YMMWORD PTR [rdi+64], ymm2
++    add rdi, r11
++    add rax, r11
++    vmovups ymm12, YMMWORD PTR [rax+0]
++    vaddps ymm3, ymm3, ymm12
++    vmovups YMMWORD PTR [rdi+0], ymm3
++    vmovups ymm12, YMMWORD PTR [rax+32]
++    vaddps ymm4, ymm4, ymm12
++    vmovups YMMWORD PTR [rdi+32], ymm4
++    vmovups ymm12, YMMWORD PTR [rax+64]
++    vaddps ymm5, ymm5, ymm12
++    vmovups YMMWORD PTR [rdi+64], ymm5
++    add rdi, r11
++    add rax, r11
++    vmovups ymm12, YMMWORD PTR [rax+0]
++    vaddps ymm6, ymm6, ymm12
++    vmovups YMMWORD PTR [rdi+0], ymm6
++    vmovups ymm12, YMMWORD PTR [rax+32]
++    vaddps ymm7, ymm7, ymm12
++    vmovups YMMWORD PTR [rdi+32], ymm7
++    vmovups ymm12, YMMWORD PTR [rax+64]
++    vaddps ymm8, ymm8, ymm12
++    vmovups YMMWORD PTR [rdi+64], ymm8
++    add rdi, r11
++    add rax, r11
++    vmovups ymm12, YMMWORD PTR [rax+0]
++    vaddps ymm9, ymm9, ymm12
++    vmovups YMMWORD PTR [rdi+0], ymm9
++    vmovups ymm12, YMMWORD PTR [rax+32]
++    vaddps ymm10, ymm10, ymm12
++    vmovups YMMWORD PTR [rdi+32], ymm10
++    vmovups ymm12, YMMWORD PTR [rax+64]
++    vaddps ymm11, ymm11, ymm12
++    vmovups YMMWORD PTR [rdi+64], ymm11
++
++    add r10, 24
++    jmp .m49r11_t
++.m49r11_next_half:
++    add r8, 16
++    cmp r8, 32
++    jb .m49r11_half
++    add rsi, QWORD PTR [rsp+8]
++    add rdx, 32
++    mov rax, r13
++    shl rax, 5
++    add rcx, rax
++    add QWORD PTR [rsp+24], rax
++    dec rbx
++    jnz .m49r11_ob
++.m49r11_done:
++    vzeroupper
++    add rsp, 32
++    pop r15
++    pop r14
++    pop r13
++    pop r12
++    pop rbx
++    pop rbp
++    ret
++.size ds_conv1d_nct_f32_avx2_oc4_t24_k11_residual,.-ds_conv1d_nct_f32_avx2_oc4_t24_k11_residual
++
++
++# M49 selective residual-store K=3: oc4 x t24, same arithmetic order as the
++# corresponding M45/M46/M48 kernel, with residual added only at the final store.
++.globl ds_conv1d_nct_f32_avx2_oc4_t24_k3_residual
++.type ds_conv1d_nct_f32_avx2_oc4_t24_k3_residual,@function
++ds_conv1d_nct_f32_avx2_oc4_t24_k3_residual:
++    push rbp
++    mov rbp, rsp
++    push rbx
++    push r12
++    push r13
++    push r14
++    push r15
++    sub rsp, 32
++    test r8, r8
++    jz .m49r3_done
++    test r9, r9
++    jz .m49r3_done
++    test r9, 7
++    jnz .m49r3_done
++    mov r12, r8
++    mov r13, QWORD PTR [rbp+24]       # Tout
++    mov r14, QWORD PTR [rbp+32]       # Tp
++    shl r14, 2
++    mov r15, QWORD PTR [rbp+40]       # dilation
++    shl r15, 2
++    mov QWORD PTR [rsp+0], rdi        # x base
++    mov rax, r12
++    imul rax, 96
++    mov QWORD PTR [rsp+8], rax        # packed bytes / oc8
++    mov rax, QWORD PTR [rbp+48]
++    mov QWORD PTR [rsp+24], rax       # residual current oc8 base
++    mov rbx, r9
++    shr rbx, 3
++.m49r3_ob:
++    xor r8d, r8d
++.m49r3_half:
++    mov rdi, r8
++    imul rdi, r13
++    add rdi, rcx
++    mov QWORD PTR [rsp+16], rdi       # y half base
++    xor r10d, r10d
++.m49r3_t:
++    cmp r10, r13
++    jae .m49r3_next_half
++    lea rdi, [rdx+r8]
++    vbroadcastss ymm0, DWORD PTR [rdi+0]
++    vmovaps ymm1, ymm0
++    vmovaps ymm2, ymm0
++    vbroadcastss ymm3, DWORD PTR [rdi+4]
++    vmovaps ymm4, ymm3
++    vmovaps ymm5, ymm3
++    vbroadcastss ymm6, DWORD PTR [rdi+8]
++    vmovaps ymm7, ymm6
++    vmovaps ymm8, ymm6
++    vbroadcastss ymm9, DWORD PTR [rdi+12]
++    vmovaps ymm10, ymm9
++    vmovaps ymm11, ymm9
++    mov r11, QWORD PTR [rsp+0]
++    lea r11, [r11+r10*4]
++    mov rax, rsi
++    add rax, r8
++    mov r9, r12
++.m49r3_ci:
++    mov rdi, r11
++    M48_K3_T24_STEP
++    M48_K3_T24_STEP
++    M48_K3_T24_STEP
++    add r11, r14
++    dec r9
++    jnz .m49r3_ci
++
++    mov rdi, QWORD PTR [rsp+16]
++    lea rdi, [rdi+r10*4]
++    mov r11, r13
++    shl r11, 2
++    mov rax, QWORD PTR [rsp+24]
++    mov r9, r8
++    imul r9, r13
++    add rax, r9
++    lea rax, [rax+r10*4]
++
++    vmovups ymm12, YMMWORD PTR [rax+0]
++    vaddps ymm0, ymm0, ymm12
++    vmovups YMMWORD PTR [rdi+0], ymm0
++    vmovups ymm12, YMMWORD PTR [rax+32]
++    vaddps ymm1, ymm1, ymm12
++    vmovups YMMWORD PTR [rdi+32], ymm1
++    vmovups ymm12, YMMWORD PTR [rax+64]
++    vaddps ymm2, ymm2, ymm12
++    vmovups YMMWORD PTR [rdi+64], ymm2
++    add rdi, r11
++    add rax, r11
++    vmovups ymm12, YMMWORD PTR [rax+0]
++    vaddps ymm3, ymm3, ymm12
++    vmovups YMMWORD PTR [rdi+0], ymm3
++    vmovups ymm12, YMMWORD PTR [rax+32]
++    vaddps ymm4, ymm4, ymm12
++    vmovups YMMWORD PTR [rdi+32], ymm4
++    vmovups ymm12, YMMWORD PTR [rax+64]
++    vaddps ymm5, ymm5, ymm12
++    vmovups YMMWORD PTR [rdi+64], ymm5
++    add rdi, r11
++    add rax, r11
++    vmovups ymm12, YMMWORD PTR [rax+0]
++    vaddps ymm6, ymm6, ymm12
++    vmovups YMMWORD PTR [rdi+0], ymm6
++    vmovups ymm12, YMMWORD PTR [rax+32]
++    vaddps ymm7, ymm7, ymm12
++    vmovups YMMWORD PTR [rdi+32], ymm7
++    vmovups ymm12, YMMWORD PTR [rax+64]
++    vaddps ymm8, ymm8, ymm12
++    vmovups YMMWORD PTR [rdi+64], ymm8
++    add rdi, r11
++    add rax, r11
++    vmovups ymm12, YMMWORD PTR [rax+0]
++    vaddps ymm9, ymm9, ymm12
++    vmovups YMMWORD PTR [rdi+0], ymm9
++    vmovups ymm12, YMMWORD PTR [rax+32]
++    vaddps ymm10, ymm10, ymm12
++    vmovups YMMWORD PTR [rdi+32], ymm10
++    vmovups ymm12, YMMWORD PTR [rax+64]
++    vaddps ymm11, ymm11, ymm12
++    vmovups YMMWORD PTR [rdi+64], ymm11
++
++    add r10, 24
++    jmp .m49r3_t
++.m49r3_next_half:
++    add r8, 16
++    cmp r8, 32
++    jb .m49r3_half
++    add rsi, QWORD PTR [rsp+8]
++    add rdx, 32
++    mov rax, r13
++    shl rax, 5
++    add rcx, rax
++    add QWORD PTR [rsp+24], rax
++    dec rbx
++    jnz .m49r3_ob
++.m49r3_done:
++    vzeroupper
++    add rsp, 32
++    pop r15
++    pop r14
++    pop r13
++    pop r12
++    pop rbx
++    pop rbp
++    ret
++.size ds_conv1d_nct_f32_avx2_oc4_t24_k3_residual,.-ds_conv1d_nct_f32_avx2_oc4_t24_k3_residual
+diff -ruN '--exclude=build' '--exclude=.git' m49base/src/runtime/threadpool.c m49work/src/runtime/threadpool.c
+--- m49base/src/runtime/threadpool.c	2026-09-20 21:51:21.265459920 +0000
++++ m49work/src/runtime/threadpool.c	2026-09-20 21:58:14.880092624 +0000
+@@ -185,10 +185,32 @@
+             const size_t c0=pack*b0, ct=pack*(b1-b0);
+             const size_t block_floats=j->K*j->P*pack;
+             if(pack==8u) {
+-                if(j->residual) ds_conv1d_nct_f32_avx2_oc8_t8_residual(
+-                    j->x, j->w+b0*block_floats, j->b0+c0, j->y+c0*j->M,
+-                    j->K, ct, j->P, j->M, j->Q, j->R, j->residual+c0*j->M);
+-                else {
++                if(j->residual) {
++                    const char *rte=getenv("DSASM_RESIDUAL_T24");
++                    const int rt24=rte && strcmp(rte,"0")!=0 && (j->M%24u)==0;
++                    const char *k3e=getenv("DSASM_K3_TMODE");
++                    const char *k7e=getenv("DSASM_K7_T24");
++                    const char *k11e=getenv("DSASM_K11_T24");
++                    const int k3mode=k3e?atoi(k3e):0;
++                    const int k7t24=(k7e && strcmp(k7e,"0")!=0);
++                    const int k11t24=(k11e && strcmp(k11e,"0")!=0);
++                    if(rt24 && j->P==3u && k3mode==24)
++                        ds_conv1d_nct_f32_avx2_oc4_t24_k3_residual(
++                            j->x,j->w+b0*block_floats,j->b0+c0,j->y+c0*j->M,
++                            j->K,ct,j->P,j->M,j->Q,j->R,j->residual+c0*j->M);
++                    else if(rt24 && j->P==7u && k7t24)
++                        ds_conv1d_nct_f32_avx2_oc4_t24_k7_residual(
++                            j->x,j->w+b0*block_floats,j->b0+c0,j->y+c0*j->M,
++                            j->K,ct,j->P,j->M,j->Q,j->R,j->residual+c0*j->M);
++                    else if(rt24 && j->P==11u && k11t24)
++                        ds_conv1d_nct_f32_avx2_oc4_t24_k11_residual(
++                            j->x,j->w+b0*block_floats,j->b0+c0,j->y+c0*j->M,
++                            j->K,ct,j->P,j->M,j->Q,j->R,j->residual+c0*j->M);
++                    else
++                        ds_conv1d_nct_f32_avx2_oc8_t8_residual(
++                            j->x, j->w+b0*block_floats, j->b0+c0, j->y+c0*j->M,
++                            j->K, ct, j->P, j->M, j->Q, j->R, j->residual+c0*j->M);
++                } else {
+                     const char *k3e=getenv("DSASM_K3_TMODE");
+                     const char *k7e=getenv("DSASM_K7_T24");
+                     const char *k11e=getenv("DSASM_K11_T24");
+diff -ruN '--exclude=build' '--exclude=.git' m49base/src/runtime/vocoder_graph.c m49work/src/runtime/vocoder_graph.c
+--- m49base/src/runtime/vocoder_graph.c	2026-09-20 21:27:03.902694988 +0000
++++ m49work/src/runtime/vocoder_graph.c	2026-09-20 21:58:46.611038691 +0000
+@@ -23,6 +23,7 @@
+ #define DSV36_CONV_FUSED_LEAKY 1u
+ #define DSV38_CONV_FUSED_RESIDUAL 2u
+ #define DSV40_CONV_VNNI 4u
++#define DSV49_CONV_RESIDUAL_P8 8u
+ 
+ enum {
+     DSV35_ADD=1, DSV35_SUB, DSV35_MUL, DSV35_DIV, DSV35_MOD,
+@@ -249,13 +250,21 @@
+     case DSV35_CONV:{
+         size_t Cin=(size_t)op->p[0],Cout=(size_t)op->p[1],Cpad=(size_t)op->p[2],K=(size_t)op->p[3],Tin=(size_t)op->p[4],pad=(size_t)op->p[5],dil=(size_t)op->p[6];
+         size_t pack=((size_t)op->p[7]==8u)?8u:4u;
++        const uint32_t residual_id=(op->flags&DSV38_CONV_FUSED_RESIDUAL)
++            ? ((op->flags&DSV49_CONV_RESIDUAL_P8)?(uint32_t)op->p[8]:op->reserved) : 0xffffffffu;
++        const float *residual=(residual_id!=0xffffffffu)?rptr(g,residual_id):NULL;
+         if(op_uses_vnni(g,op)){
+-            return ds_vocoder_conv1d_vnni_u8s8(
++            int rc=ds_vocoder_conv1d_vnni_u8s8(
+                 rptr(g,op->in0),cptr(g,op->reserved),rptr(g,op->in2),wptr(g,op->out),
+                 Cin,Cout,K,Tin,pad,dil,(op->flags&DSV36_CONV_FUSED_LEAKY)!=0,op->f[0],
+                 g->vnni_qx,g->vnni_xpack,g->vnni_scales,g->pool,&g->vnni_pack_ms,&g->vnni_kernel_ms);
++            if(rc)return rc;
++            if(residual){
++                const size_t Tout=Tin+2u*pad-dil*(K-1u);
++                ds_add_f32_avx2(wptr(g,op->out),residual,wptr(g,op->out),Cout*Tout);
++            }
++            return 0;
+         }
+-        const float *residual=(op->flags&DSV38_CONV_FUSED_RESIDUAL)?rptr(g,op->reserved):NULL;
+         (void)Cout; return ds_vocoder_conv1d_ex_residual_f32_avx2(
+             rptr(g,op->in0),rptr(g,op->in1),rptr(g,op->in2),residual,wptr(g,op->out),
+             Cin,Cpad,K,Tin,pad,dil,pack,(op->flags&DSV36_CONV_FUSED_LEAKY)!=0,op->f[0],g->conv_ws,g->pool);
+Binary files m49base/tools/__pycache__/dsv35_common.cpython-313.pyc and m49work/tools/__pycache__/dsv35_common.cpython-313.pyc differ
+Binary files m49base/tools/__pycache__/pack_vocoder_graph_m35.cpython-313.pyc and m49work/tools/__pycache__/pack_vocoder_graph_m35.cpython-313.pyc differ
+diff -ruN '--exclude=build' '--exclude=.git' m49base/tools/dsv35_common.py m49work/tools/dsv35_common.py
+--- m49base/tools/dsv35_common.py	2026-09-20 21:27:03.906694959 +0000
++++ m49work/tools/dsv35_common.py	2026-09-20 21:58:35.895220544 +0000
+@@ -56,7 +56,7 @@
+         for oi,op in enumerate(self.ops):
+             in0,in1,in2,out=op[1],op[2],op[3],op[4]
+             prod[out]=oi
+-            extra=op[7] if (op[6]&2) else 0xffffffff
++            extra=(op[8+8] if (op[6]&8) else (op[7] if (op[6]&2) else 0xffffffff))
+             for tid in (in0,in1,in2,extra):
+                 if tid!=0xffffffff and tid < len(last): last[tid]=max(last[tid],oi)
+         last[out_id]=max(last[out_id],nops)
+diff -ruN '--exclude=build' '--exclude=.git' m49base/tools/pack_vocoder_graph_m35.py m49work/tools/pack_vocoder_graph_m35.py
+--- m49base/tools/pack_vocoder_graph_m35.py	2026-09-20 21:27:03.906694959 +0000
++++ m49work/tools/pack_vocoder_graph_m35.py	2026-09-20 21:59:33.668751304 +0000
+@@ -9,7 +9,7 @@
+ 
+ def main():
+     ap=argparse.ArgumentParser(description='Compile fixed-shape NSF-HiFiGAN ONNX to DSVOC35 pure-native bundle')
+-    ap.add_argument('onnx');ap.add_argument('--frames',type=int,default=48);ap.add_argument('--out',required=True);ap.add_argument('--work',required=True);ap.add_argument('--seed',type=int,default=35);ap.add_argument('--enable-residual-fusion',action='store_true',help='M38 experiment; disabled by default in M39 because target-machine A/B regressed');ap.add_argument('--vnni-scope',choices=['none','stage128','all-k711'],default='stage128',help='M40: embed prequantized AVX-VNNI weights; runtime DSASM_VNNI selects whether to execute them')
++    ap.add_argument('onnx');ap.add_argument('--frames',type=int,default=48);ap.add_argument('--out',required=True);ap.add_argument('--work',required=True);ap.add_argument('--seed',type=int,default=35);ap.add_argument('--enable-residual-fusion',action='store_true',help='M38 experiment; disabled by default in M39 because target-machine A/B regressed');ap.add_argument('--residual-scope',choices=['none','full64','k7ge128'],default='none',help='M49: fuse Conv->Add only for full/channel-owner Cout>=64 K3/K7/K11 t24 shapes');ap.add_argument('--vnni-scope',choices=['none','stage128','all-k711'],default='stage128',help='M40: embed prequantized AVX-VNNI weights; runtime DSASM_VNNI selects whether to execute them')
+     a=ap.parse_args()
+     import onnx, onnxruntime as ort
+     from onnx import numpy_helper, helper, TensorProto
+@@ -69,13 +69,20 @@
+     fuse_leaky={}
+     fuse_residual={}
+     skip_nodes=set()
+-    # M39 defaults back to the M37 winner: residual-store fusion is retained only
+-    # as an explicit M38 experiment because target-machine A/B regressed overall.
+-    if a.enable_residual_fusion:
++    # M49 keeps legacy M38 all-residual fusion for compatibility, but adds a
++    # selective production experiment: only full/channel-owner K3/K7/K11
++    # shapes with Cout>=64 and T divisible by 24.  C32/C16 stay on the proven
++    # 2-D range path, where M47 showed t24 increases cycles despite fewer insns.
++    if a.enable_residual_fusion or a.residual_scope!='none':
+       for ni,n in enumerate(g.node):
+         if n.op_type!='Conv' or not n.output or n.input[1] not in init: continue
+         W=np.asarray(init[n.input[1]])
+         if W.ndim!=3 or int(W.shape[0])<8 or int(W.shape[0])%8: continue
++        if a.residual_scope in ('full64','k7ge128'):
++            Cout,Cin,K=map(int,W.shape)
++            if a.residual_scope=='full64' and (Cout<64 or K not in (3,7,11)): continue
++            if a.residual_scope=='k7ge128' and (Cout<128 or K!=7): continue
++            if n.output[0] not in shapes or int(shapes[n.output[0]][-1])%24: continue
+         cns=consumers.get(n.output[0],[])
+         if len(cns)!=1: continue
+         ai=cns[0];an=g.node[ai]
+@@ -153,7 +160,7 @@
+             # M40: selectively embed per-output-channel S8 weights for the
+             # C=128,T=3072 K7/K11 stage that M39.1 proved worthwhile. The
+             # FP32 packed weights remain in the bundle for exact fallback/A-B.
+-            eligible_vnni = (pack==8 and K in (7,11) and not a.enable_residual_fusion)
++            eligible_vnni = (pack==8 and K in (7,11))
+             if a.vnni_scope=='stage128': eligible_vnni = eligible_vnni and Cin==128 and Cout==128 and int(oshape[2])==3072
+             elif a.vnni_scope=='all-k711': eligible_vnni = eligible_vnni
+             else: eligible_vnni = False
+@@ -172,10 +179,11 @@
+             if ni in fuse_leaky:
+                 xname,alpha=fuse_leaky[ni];flags|=1;fused_leaky_count+=1
+                 xshape=tuple(int(x) for x in shapes[xname])
++            residual_id=0
+             if ni in fuse_residual:
+-                resname,_,_=fuse_residual[ni];reserved=input_id(resname);flags|=2;fused_residual_count+=1
++                resname,_,_=fuse_residual[ni];residual_id=input_id(resname);flags|=2|8;fused_residual_count+=1
+             if pack==8: pack8_count+=1
+-            b.add_op(typ,[input_id(xname),wid,bid],oid,p=[Cin,Cout,Cpad,K,int(xshape[2]),int(pads[0]),int(dils[0]),pack],f=[alpha],flags=flags,reserved=reserved);convs+=1
++            b.add_op(typ,[input_id(xname),wid,bid],oid,p=[Cin,Cout,Cpad,K,int(xshape[2]),int(pads[0]),int(dils[0]),pack,residual_id],f=[alpha],flags=flags,reserved=reserved);convs+=1
+         elif typ=='ConvTranspose':
+             xshape=tuple(int(x) for x in shapes[n.input[0]]);oshape=tuple(int(x) for x in shapes[out]);W=np.asarray(init[n.input[1]],dtype=np.float32)
+             if len(xshape)!=3 or xshape[0]!=1 or len(oshape)!=3 or oshape[0]!=1 or W.ndim!=3:raise ValueError(f'{n.name}: only N=1 ConvTranspose1d')
+@@ -187,7 +195,7 @@
+     if 'waveform' not in ids:raise SystemExit(f'waveform tensor not found, outputs={list(ids)[-20:]}')
+     naive_arena,planned_arena=b.plan_arena_lifetimes(ids['mel'],ids['f0'],ids['waveform'])
+     outp=b.write(a.out,ids['mel'],ids['f0'],ids['waveform'])
+-    meta={'format':'DSVOC35','frames':a.frames,'mel_bins':128,'samples':wave.size,'nodes':len(g.node),'ops':len(b.ops),'tensors':len(b.tensors),'arena_floats':b.arena,'arena_mib':b.arena*4/2**20,'arena_naive_mib':naive_arena*4/2**20,'arena_reduction_x':(naive_arena/planned_arena if planned_arena else 1.0),'const_mib':len(b.const)/2**20,'conv':convs,'convtranspose':cts,'fused_leaky_conv':fused_leaky_count,'fused_residual_add':fused_residual_count,'pack8_conv':pack8_count,'conv2d_candidates_8w':conv2d_candidates,'vnni_candidates':vnni_candidates,'vnni_scope':a.vnni_scope,'conv_shapes':conv_shapes,'supported_ops':sorted(OPS),'revision':'M40-selective-vnni-stage128'+('-residual-experimental' if a.enable_residual_fusion else '')}
++    meta={'format':'DSVOC35','frames':a.frames,'mel_bins':128,'samples':wave.size,'nodes':len(g.node),'ops':len(b.ops),'tensors':len(b.tensors),'arena_floats':b.arena,'arena_mib':b.arena*4/2**20,'arena_naive_mib':naive_arena*4/2**20,'arena_reduction_x':(naive_arena/planned_arena if planned_arena else 1.0),'const_mib':len(b.const)/2**20,'conv':convs,'convtranspose':cts,'fused_leaky_conv':fused_leaky_count,'fused_residual_add':fused_residual_count,'pack8_conv':pack8_count,'conv2d_candidates_8w':conv2d_candidates,'vnni_candidates':vnni_candidates,'vnni_scope':a.vnni_scope,'conv_shapes':conv_shapes,'supported_ops':sorted(OPS),'revision':'M40-selective-vnni-stage128'+(('-residual-'+a.residual_scope) if a.residual_scope!='none' else ('-residual-experimental' if a.enable_residual_fusion else ''))}
+     Path(str(Path(a.out).with_suffix('.json'))).write_text(json.dumps(meta,indent=2),encoding='utf-8')
+     print('M35 packed pure-native vocoder:',json.dumps(meta))
+     print('bundle:',outp);print('sample mel/f0/golden:',w/'mel.f32',w/'f0.f32',w/'golden_wave.f32')
+diff -ruN '--exclude=build' '--exclude=.git' m49base/tools/test_residual_t24_m49.c m49work/tools/test_residual_t24_m49.c
+--- m49base/tools/test_residual_t24_m49.c	1970-01-01 00:00:00.000000000 +0000
++++ m49work/tools/test_residual_t24_m49.c	2026-09-20 21:59:17.800347968 +0000
+@@ -0,0 +1,35 @@
++#define _POSIX_C_SOURCE 200809L
++#include "dsasm_kernels.h"
++#include <math.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <time.h>
++static uint32_t st=0x49123456u;
++static float fr(void){st=st*1664525u+1013904223u;return ((int32_t)(st>>8))/8388608.0f;}
++static void *am(size_t n){void *p=0;return posix_memalign(&p,64,n)?0:p;}
++static double now_ms(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec*1e3+t.tv_nsec*1e-6;}
++static void sort7(double*a){for(int i=0;i<7;i++)for(int j=i+1;j<7;j++)if(a[j]<a[i]){double z=a[i];a[i]=a[j];a[j]=z;}}
++static int one(int K,size_t C,size_t T,size_t d,int bench){
++ const size_t pad=(size_t)(K/2)*d,Tp=T+2*pad,nx=C*Tp,nw=C*C*(size_t)K,ny=C*T;
++ float*x=am(nx*4),*w=am(nw*4),*b=am(C*4),*r=am(ny*4),*sep=am(ny*4),*fus=am(ny*4);if(!x||!w||!b||!r||!sep||!fus)return 2;
++ memset(x,0,nx*4);for(size_t c=0;c<C;c++)for(size_t t=0;t<T;t++)x[c*Tp+pad+t]=.1f*fr();
++ for(size_t i=0;i<nw;i++)w[i]=.02f*fr();for(size_t i=0;i<C;i++)b[i]=.01f*fr();for(size_t i=0;i<ny;i++)r[i]=.03f*fr();
++ if(K==3)ds_conv1d_nct_f32_avx2_oc4_t24_k3(x,w,b,sep,C,C,K,T,Tp,d);
++ else if(K==7)ds_conv1d_nct_f32_avx2_oc4_t24_k7(x,w,b,sep,C,C,K,T,Tp,d);
++ else ds_conv1d_nct_f32_avx2_oc4_t24_k11(x,w,b,sep,C,C,K,T,Tp,d);
++ ds_add_f32_avx2(sep,r,sep,ny);
++ if(K==3)ds_conv1d_nct_f32_avx2_oc4_t24_k3_residual(x,w,b,fus,C,C,K,T,Tp,d,r);
++ else if(K==7)ds_conv1d_nct_f32_avx2_oc4_t24_k7_residual(x,w,b,fus,C,C,K,T,Tp,d,r);
++ else ds_conv1d_nct_f32_avx2_oc4_t24_k11_residual(x,w,b,fus,C,C,K,T,Tp,d,r);
++ float ma=0;size_t bd=0;for(size_t i=0;i<ny;i++){float z=fabsf(sep[i]-fus[i]);if(z>ma)ma=z;if(memcmp(sep+i,fus+i,4))bd++;}
++ printf("M49 residual K=%d C=%zu T=%zu d=%zu max_abs=%.9g bitdiff=%zu\n",K,C,T,d,ma,bd);if(ma>1e-6f)return 1;
++ if(bench){double a[7],f[7];for(int q=0;q<7;q++){double z=now_ms();if(K==3)ds_conv1d_nct_f32_avx2_oc4_t24_k3(x,w,b,sep,C,C,K,T,Tp,d);else if(K==7)ds_conv1d_nct_f32_avx2_oc4_t24_k7(x,w,b,sep,C,C,K,T,Tp,d);else ds_conv1d_nct_f32_avx2_oc4_t24_k11(x,w,b,sep,C,C,K,T,Tp,d);ds_add_f32_avx2(sep,r,sep,ny);a[q]=now_ms()-z;z=now_ms();if(K==3)ds_conv1d_nct_f32_avx2_oc4_t24_k3_residual(x,w,b,fus,C,C,K,T,Tp,d,r);else if(K==7)ds_conv1d_nct_f32_avx2_oc4_t24_k7_residual(x,w,b,fus,C,C,K,T,Tp,d,r);else ds_conv1d_nct_f32_avx2_oc4_t24_k11_residual(x,w,b,fus,C,C,K,T,Tp,d,r);f[q]=now_ms()-z;}sort7(a);sort7(f);printf("M49 micro K=%d separate=%.3f fused=%.3f speedup=%.3fx\n",K,a[3],f[3],a[3]/f[3]);}
++ free(x);free(w);free(b);free(r);free(sep);free(fus);return 0;
++}
++int main(void){int q=0;
++ q|=one(3,256,384,1,1);q|=one(3,128,3072,1,1);q|=one(3,64,6144,1,1);
++ q|=one(7,256,384,1,1);q|=one(7,128,3072,1,1);q|=one(7,64,6144,1,1);
++ q|=one(11,256,384,1,1);q|=one(11,128,3072,1,1);q|=one(11,64,6144,1,1);
++ puts(q?"M49 residual FAIL":"M49 residual parity OK");return q;}

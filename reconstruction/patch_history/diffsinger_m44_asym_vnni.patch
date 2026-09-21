@@ -1,0 +1,377 @@
+diff -ruN '--exclude=build' '--exclude=.git' m43applycheck2/docs/M44_ASYMMETRIC_VNNI.md m44work/docs/M44_ASYMMETRIC_VNNI.md
+--- m43applycheck2/docs/M44_ASYMMETRIC_VNNI.md	1970-01-01 00:00:00.000000000 +0000
++++ m44work/docs/M44_ASYMMETRIC_VNNI.md	2026-09-20 21:08:19.723699562 +0000
+@@ -0,0 +1,23 @@
++# M44 asymmetric VNNI + quality-gated stage admission
++
++M43 established three target-machine facts:
++
++- parallel residual Add is a regression and must stay off by default;
++- broad `all-k711` AVX-VNNI is much faster but fails the waveform quality gate;
++- selecting a wider vocoder worker count from one long sweep can be polluted by
++  thermal/frequency state, so M44 keeps the search small and re-runs finalists.
++
++The M40 VNNI activation quantizer used a symmetric U8 mapping with a fixed zero
++point of 128.  Fused LeakyReLU activations are strongly asymmetric, so this
++wastes code points on the small negative tail.  M44 adds
++`DSASM_VNNI_ASYM=1`: the runtime measures the post-LeakyReLU min/max, maps the
++full interval to U8 0..255, encodes padding with the dynamic zero point, and
++recomputes the integer zero-point correction before the unchanged AVX-VNNI
++kernel.  `DSASM_VNNI_ASYM=0` is bit-compatible with M40.1.
++
++An `all-k711` bundle can now be restricted at runtime with
++`DSASM_VNNI_CIN=128,64,...`.  M44 starts at the known-safe 128-channel stage,
++tries adding 256/64/32/16 stages one at a time, and admits a stage only when the
++whole real vocoder still passes cosine >= 0.999 and SNR >= 25 dB.  The winning
++stage mask is then re-tested with k11/k117 and 8/10 workers before the real
++acoustic + vocoder E2E run.
+diff -ruN '--exclude=build' '--exclude=.git' m43applycheck2/scripts/run_m44_asym_vnni.sh m44work/scripts/run_m44_asym_vnni.sh
+--- m43applycheck2/scripts/run_m44_asym_vnni.sh	1970-01-01 00:00:00.000000000 +0000
++++ m44work/scripts/run_m44_asym_vnni.sh	2026-09-20 21:08:19.725406414 +0000
+@@ -0,0 +1,176 @@
++#!/usr/bin/env bash
++set -euo pipefail
++PROJECT="${PROJECT:-/home/fuurin/asm/diffsinger}"
++MODEL="${MODEL:-$PROJECT/model/DongFangZhiZi_Nectar_DiffSinger_CE_26.08.31}"
++PY="${PY:-$PROJECT/.venv/bin/python}"
++SCREEN_ROUNDS="${M44_SCREEN_ROUNDS:-5}"
++FINAL_ROUNDS="${M44_FINAL_ROUNDS:-9}"
++cd "$PROJECT"
++
++make -j"$(nproc)" build/dsasm-vocoder-m40 build/dsasm-acoustic
++rm -rf build/m44
++mkdir -p build/m44
++
++printf '\n========== M44 SYNTHETIC QUANTIZER CHECK ==========\n'
++"$PY" tools/make_fake_vnni_graph_m40.py build/m44/fake.dsv35 --work build/m44/fake
++for asym in 0 1; do
++  echo "--- fake asym=$asym ---"
++  DSASM_PARALLEL_ADD=0 DSASM_VNNI=k117 DSASM_VNNI_ASYM="$asym" DSASM_VNNI_CIN=all \
++  DSASM_GOLDEN_COS=0.999 DSASM_GOLDEN_SNR=25 \
++  ./build/dsasm-vocoder-m40 infer build/m44/fake.dsv35 \
++    --mel build/m44/fake/mel.f32 --f0 build/m44/fake/f0.f32 \
++    --out "build/m44/fake_${asym}.f32" --golden build/m44/fake/golden.f32 \
++    --workers 4 --rounds 5 --profile 2>&1 | tee "build/m44/fake_asym${asym}.log"
++done
++
++printf '\n========== M44 PACK ALL VNNI CANDIDATES ONCE ==========\n'
++"$PY" tools/pack_vocoder_graph_m35.py \
++  "$MODEL/dsvocoder/nsf_hifigan.onnx" --frames 48 --vnni-scope all-k711 \
++  --out build/m44/nsf_allk.dsv35 --work build/m44/packer
++MEL=build/m44/packer/mel.f32
++F0=build/m44/packer/f0.f32
++GOLD=build/m44/packer/golden_wave.f32
++BUNDLE=build/m44/nsf_allk.dsv35
++: > build/m44/candidates.tsv
++
++run_case(){
++  local tag="$1" mode="$2" workers="$3" asym="$4" mask="$5" rounds="${6:-$SCREEN_ROUNDS}" profile="${7:-0}"
++  local extra=()
++  [[ "$profile" == 1 ]] && extra+=(--profile)
++  echo
++  echo "========== M44 $tag  mode=$mode workers=$workers asym=$asym cin=$mask =========="
++  set +e
++  DSASM_PARALLEL_ADD=0 DSASM_CONVT_S8K16=1 DSASM_VNNI="$mode" \
++  DSASM_VNNI_ASYM="$asym" DSASM_VNNI_CIN="$mask" DSASM_KSPEC=1 \
++  DSASM_PROFILE_SHAPES=0 DSASM_GOLDEN_COS=0.999 DSASM_GOLDEN_SNR=25 \
++  ./build/dsasm-vocoder-m40 infer "$BUNDLE" \
++    --mel "$MEL" --f0 "$F0" --out "build/m44/${tag}.f32" --golden "$GOLD" \
++    --workers "$workers" --rounds "$rounds" "${extra[@]}" \
++    2>&1 | tee "build/m44/${tag}.log"
++  local rc=${PIPESTATUS[0]}
++  set -e
++  local med cos snr
++  med=$(sed -n 's/.*median=\([0-9.]*\) ms.*/\1/p' "build/m44/${tag}.log" | tail -1)
++  cos=$(sed -n 's/.*cosine=\([0-9.eE+-]*\).*/\1/p' "build/m44/${tag}.log" | tail -1)
++  snr=$(sed -n 's/.*SNR=\([0-9.eE+-]*\) dB.*/\1/p' "build/m44/${tag}.log" | tail -1)
++  if [[ $rc -eq 0 && -n "$med" ]] && grep -q 'DSASM parity: OK' "build/m44/${tag}.log"; then
++    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$tag" "$mode" "$workers" "$asym" "$mask" "$med" "${cos:-NA}" "${snr:-NA}" >> build/m44/candidates.tsv
++    return 0
++  fi
++  echo "M44 rejected: $tag rc=$rc median=${med:-NA} cosine=${cos:-NA} SNR=${snr:-NA}"
++  return 1
++}
++
++# Known-safe reference and the direct asymmetric replacement.
++run_case sym_128_k11_w8  k11  8 0 128 "$SCREEN_ROUNDS" 1
++run_case asym_128_k11_w8 k11  8 1 128 "$SCREEN_ROUNDS" 1
++run_case asym_128_k117_w8 k117 8 1 128 "$SCREEN_ROUNDS" 0 || true
++
++# Greedy quality-gated stage expansion.  The all-k bundle has every VNNI blob,
++# but only stages named by DSASM_VNNI_CIN actually execute quantized kernels.
++MASK=128
++REMAINING=(256 64 32 16)
++ROUND=0
++while ((${#REMAINING[@]})); do
++  ROUND=$((ROUND+1))
++  : > "build/m44/greedy_${ROUND}.tsv"
++  NEXT=()
++  for st in "${REMAINING[@]}"; do
++    cand="$MASK,$st"
++    tag="greedy_r${ROUND}_cin_${cand//,/_}"
++    if run_case "$tag" k11 8 1 "$cand" "$SCREEN_ROUNDS" 0; then
++      med=$(awk -F '\t' -v t="$tag" '$1==t{print $6}' build/m44/candidates.tsv | tail -1)
++      printf '%s\t%s\t%s\n' "$med" "$st" "$cand" >> "build/m44/greedy_${ROUND}.tsv"
++    fi
++  done
++  if [[ ! -s "build/m44/greedy_${ROUND}.tsv" ]]; then
++    echo "M44 greedy: no remaining stage passes quality gate after mask=$MASK"
++    break
++  fi
++  read -r BEST_MED BEST_STAGE BEST_MASK < <(sort -n -k1,1 "build/m44/greedy_${ROUND}.tsv" | head -1)
++  printf 'M44 greedy round %d: admit Cin=%s -> mask=%s median=%s ms\n' "$ROUND" "$BEST_STAGE" "$BEST_MASK" "$BEST_MED"
++  MASK="$BEST_MASK"
++  for st in "${REMAINING[@]}"; do [[ "$st" != "$BEST_STAGE" ]] && NEXT+=("$st"); done
++  REMAINING=("${NEXT[@]}")
++done
++
++printf '\nM44 quality-safe greedy mask: %s\n' "$MASK"
++
++# Re-race finalists with longer medians.  k117 is allowed only if it still
++# passes the same waveform gate with the selected stage mask.
++run_case final_k11_w8  k11  8 1 "$MASK" "$FINAL_ROUNDS" 1
++run_case final_k117_w8 k117 8 1 "$MASK" "$FINAL_ROUNDS" 0 || true
++run_case final_k11_w10 k11 10 1 "$MASK" "$FINAL_ROUNDS" 0
++run_case final_k117_w10 k117 10 1 "$MASK" "$FINAL_ROUNDS" 0 || true
++
++BEST=$(python - <<'PY'
++from pathlib import Path
++rows=[]
++for line in Path('build/m44/candidates.tsv').read_text().splitlines():
++    tag,mode,w,asym,mask,med,cos,snr=line.split('\t')
++    if tag.startswith('final_'):
++        rows.append((float(med),tag,mode,w,asym,mask,cos,snr))
++if not rows: raise SystemExit('M44: no quality-passing final candidate')
++print('\t'.join(map(str,min(rows))))
++PY
++)
++IFS=$'\t' read -r BEST_MS BEST_TAG BEST_MODE BEST_WORKERS BEST_ASYM BEST_MASK BEST_COS BEST_SNR <<< "$BEST"
++printf '\n========== M44 WINNER ==========\n'
++printf 'tag=%s median=%s ms mode=%s workers=%s asym=%s cin=%s cosine=%s SNR=%s\n' \
++  "$BEST_TAG" "$BEST_MS" "$BEST_MODE" "$BEST_WORKERS" "$BEST_ASYM" "$BEST_MASK" "$BEST_COS" "$BEST_SNR"
++
++printf '\n========== M44 VOCODER SUMMARY ==========\n'
++for f in build/m44/final_*.log build/m44/sym_128_k11_w8.log build/m44/asym_128_k11_w8.log; do
++  [[ -f "$f" ]] || continue
++  echo "--- $(basename "$f") ---"
++  grep -E '^  Add[[:space:]]|^  Conv[[:space:]]|^  ConvTranspose|^  VNNI-|PURE-ASM vocoder:|parity max_abs=' "$f" || true
++done
++
++ACOUSTIC=build/m42_acoustic
++if [[ ! -f "$ACOUSTIC/model.json" ]]; then
++  rm -rf "$ACOUSTIC"
++  "$PY" tools/pack_acoustic_onnx_m25.py "$MODEL/acoustic.onnx" --model-dir "$MODEL" --out "$ACOUSTIC"
++fi
++
++# Run E2E from a short settled state.  Acoustic keeps its own proven default
++# pool; --workers only controls the vocoder in run_native_e2e_m40_1.py.
++sleep "${M44_SETTLE_SECONDS:-2}"
++rm -rf build/m44_e2e
++set +e
++DSASM_PARALLEL_ADD=0 DSASM_CONVT_S8K16=1 DSASM_VNNI_ASYM="$BEST_ASYM" DSASM_VNNI_CIN="$BEST_MASK" \
++"$PY" tools/run_native_e2e_m40_1.py \
++  --packed-acoustic "$ACOUSTIC" --acoustic-cli ./build/dsasm-acoustic \
++  --vocoder-bundle "$BUNDLE" --vocoder-cli ./build/dsasm-vocoder-m40 \
++  --vocoder-onnx "$MODEL/dsvocoder/nsf_hifigan.onnx" \
++  --speaker-emb "$MODEL/dongfangzhizi-nectar-xiao.emb" \
++  --language-id 4 --depth 0.6 --steps 4 --workers "$BEST_WORKERS" \
++  --rounds "$FINAL_ROUNDS" --modes "$BEST_MODE" --work build/m44_e2e \
++  2>&1 | tee build/m44/e2e.log
++E2E_RC=${PIPESTATUS[0]}
++set -e
++
++# The real acoustic mel is the final authority.  If the greedy synthetic/sample
++# search over-quantized it, finish this same command on the established M42-safe
++# symmetric stage128/k11/w8 path.
++if [[ $E2E_RC -ne 0 ]]; then
++  echo
++  echo 'M44 winner failed real-acoustic E2E quality gate; fallback = symmetric Cin128/k11/w8.'
++  sleep "${M44_SETTLE_SECONDS:-2}"
++  rm -rf build/m44_e2e_fallback
++  DSASM_PARALLEL_ADD=0 DSASM_CONVT_S8K16=1 DSASM_VNNI_ASYM=0 DSASM_VNNI_CIN=128 \
++  "$PY" tools/run_native_e2e_m40_1.py \
++    --packed-acoustic "$ACOUSTIC" --acoustic-cli ./build/dsasm-acoustic \
++    --vocoder-bundle "$BUNDLE" --vocoder-cli ./build/dsasm-vocoder-m40 \
++    --vocoder-onnx "$MODEL/dsvocoder/nsf_hifigan.onnx" \
++    --speaker-emb "$MODEL/dongfangzhizi-nectar-xiao.emb" \
++    --language-id 4 --depth 0.6 --steps 4 --workers 8 \
++    --rounds "$FINAL_ROUNDS" --modes k11 --work build/m44_e2e_fallback \
++    2>&1 | tee build/m44/e2e_fallback.log
++fi
++
++printf '\n========== M44 FINAL ==========\n'
++for f in build/m44/e2e.log build/m44/e2e_fallback.log; do
++  [[ -f "$f" ]] || continue
++  echo "--- $(basename "$f") ---"
++  grep -E 'M40\.1 PURE CPU/C/ASM E2E|realtime RTF|PURE-ASM vocoder:|parity max_abs=|^  Add[[:space:]]|^  Conv[[:space:]]|^  ConvTranspose|^  VNNI-' "$f" || true
++done
+diff -ruN '--exclude=build' '--exclude=.git' m43applycheck2/src/runtime/vocoder_graph.c m44work/src/runtime/vocoder_graph.c
+--- m43applycheck2/src/runtime/vocoder_graph.c	2026-09-20 20:55:38.300288089 +0000
++++ m44work/src/runtime/vocoder_graph.c	2026-09-20 21:08:32.127638347 +0000
+@@ -111,9 +111,33 @@
+     if(!strcmp(e,"1")||!strcmp(e,"auto")||!strcmp(e,"k117")||!strcmp(e,"k7k11"))return 2;
+     return 0;
+ }
++static unsigned vnni_cin_mask(void){
++    /* M44: an all-k711 bundle may carry VNNI weights for every HiFi-GAN
++       stage, while runtime can admit only quality-safe channel stages. */
++    static int init=0; static unsigned mask=0;
++    if(init)return mask;
++    init=1;
++    const char *e=getenv("DSASM_VNNI_CIN");
++    if(!e||!*e||!strcmp(e,"all")){mask=0x1fu;return mask;}
++    const char *p=e;
++    while(*p){
++        char *end=NULL; unsigned long v=strtoul(p,&end,10);
++        if(end==p){while(*p&&*p!=',')p++;if(*p==',')p++;continue;}
++        if(v==16)mask|=1u<<0; else if(v==32)mask|=1u<<1;
++        else if(v==64)mask|=1u<<2; else if(v==128)mask|=1u<<3;
++        else if(v==256)mask|=1u<<4;
++        p=end;while(*p&&*p!=',')p++;if(*p==',')p++;
++    }
++    return mask;
++}
++static int vnni_cin_allowed(size_t cin){
++    unsigned bit=cin==16?1u<<0:cin==32?1u<<1:cin==64?1u<<2:cin==128?1u<<3:cin==256?1u<<4:0u;
++    return bit && (vnni_cin_mask()&bit)!=0;
++}
+ static int op_uses_vnni(const DSAsmVocoderGraph*g,const DSV35Op*op){
+     if(!g->vnni_available || !(op->flags&DSV40_CONV_VNNI))return 0;
+-    int m=vnni_mode();size_t K=(size_t)op->p[3];
++    int m=vnni_mode();size_t K=(size_t)op->p[3],Cin=(size_t)op->p[0];
++    if(!vnni_cin_allowed(Cin))return 0;
+     return (m==1 && K==11u) || (m>=2 && (K==7u||K==11u));
+ }
+ static inline size_t dim4(const DSV35Tensor *t,int axis){
+@@ -130,7 +154,9 @@
+            old single-thread Add showed up as ~20-30 ms in whole vocoder
+            profiles while seven other P-core logical CPUs were idle. */
+         const char *pe=getenv("DSASM_PARALLEL_ADD");
+-        const int par=!(pe && !strcmp(pe,"0"));
++        /* M43 target A/B: parallel Add increased end-to-end vocoder time.
++           Keep it as an opt-in lab path instead of an accidental default. */
++        const int par=pe && strcmp(pe,"0")!=0;
+         if(par && g->pool && n>=16384u) ds_threadpool_add_f32(g->pool,a,b,o,n);
+         else ds_add_f32_avx2(a,b,o,n);
+         return;
+diff -ruN '--exclude=build' '--exclude=.git' m43applycheck2/src/runtime/vocoder_vnni.c m44work/src/runtime/vocoder_vnni.c
+--- m43applycheck2/src/runtime/vocoder_vnni.c	2026-09-20 20:32:21.000000000 +0000
++++ m44work/src/runtime/vocoder_vnni.c	2026-09-20 21:07:22.069257371 +0000
+@@ -24,38 +24,80 @@
+ #endif
+ }
+ 
++static int vnni_asym_enabled(void){
++    static int init=0,enabled=0;
++    if(!init){const char *e=getenv("DSASM_VNNI_ASYM");enabled=e&&strcmp(e,"0")!=0;init=1;}
++    return enabled;
++}
++
+ static float quantize_u8_padded_avx2(
+-    const float *x,unsigned char *q,size_t C,size_t T,size_t pad,int leaky,float alpha)
++    const float *x,unsigned char *q,size_t C,size_t T,size_t pad,int leaky,float alpha,
++    int asym,int *zero_point)
+ {
+     const size_t n=C*T,Tp=T+2u*pad;
+-    const __m256 sign=_mm256_set1_ps(-0.0f), zero=_mm256_setzero_ps(), av=_mm256_set1_ps(alpha);
+-    __m256 vmax=_mm256_setzero_ps();
+-    size_t i=0;
+-    for(;i+8<=n;i+=8){
+-        __m256 v=_mm256_loadu_ps(x+i);
+-        if(leaky){__m256 pos=_mm256_max_ps(v,zero),neg=_mm256_min_ps(v,zero);v=_mm256_add_ps(pos,_mm256_mul_ps(neg,av));}
+-        __m256 a=_mm256_andnot_ps(sign,v);vmax=_mm256_max_ps(vmax,a);
++    const __m256 zero=_mm256_setzero_ps(), av=_mm256_set1_ps(alpha);
++    float sx=1.0f,inv=1.0f; int zp=128;
++    if(asym){
++        /* LeakyReLU activations are strongly asymmetric.  The old M40 path
++           spent half of U8's dynamic range on a negative tail that is scaled
++           by alpha.  Track [min,max] (including exact zero for pad) and use
++           the full 0..255 code space instead. */
++        __m256 vmin=zero,vmax=zero;
++        size_t i=0;
++        for(;i+8<=n;i+=8){
++            __m256 v=_mm256_loadu_ps(x+i);
++            if(leaky){__m256 pos=_mm256_max_ps(v,zero),neg=_mm256_min_ps(v,zero);v=_mm256_add_ps(pos,_mm256_mul_ps(neg,av));}
++            vmin=_mm256_min_ps(vmin,v);vmax=_mm256_max_ps(vmax,v);
++        }
++        float lo8[8],hi8[8];_mm256_storeu_ps(lo8,vmin);_mm256_storeu_ps(hi8,vmax);
++        float lo=0.0f,hi=0.0f;for(int j=0;j<8;j++){if(lo8[j]<lo)lo=lo8[j];if(hi8[j]>hi)hi=hi8[j];}
++        for(;i<n;i++){float v=x[i];if(leaky&&v<0)v*=alpha;if(v<lo)lo=v;if(v>hi)hi=v;}
++        const float span=hi-lo;
++        if(span>0.0f){sx=span/255.0f;inv=1.0f/sx;long z=lrintf(-lo*inv);if(z<0)z=0;if(z>255)z=255;zp=(int)z;}
++    }else{
++        const __m256 sign=_mm256_set1_ps(-0.0f);__m256 vmax=zero;
++        size_t i=0;
++        for(;i+8<=n;i+=8){
++            __m256 v=_mm256_loadu_ps(x+i);
++            if(leaky){__m256 pos=_mm256_max_ps(v,zero),neg=_mm256_min_ps(v,zero);v=_mm256_add_ps(pos,_mm256_mul_ps(neg,av));}
++            vmax=_mm256_max_ps(vmax,_mm256_andnot_ps(sign,v));
++        }
++        float tmp[8];_mm256_storeu_ps(tmp,vmax);float mx=0.0f;for(int j=0;j<8;j++)if(tmp[j]>mx)mx=tmp[j];
++        for(;i<n;i++){float v=x[i];if(leaky&&v<0)v*=alpha;float a=fabsf(v);if(a>mx)mx=a;}
++        sx=mx>0.0f?mx/127.0f:1.0f;inv=1.0f/sx;zp=128;
+     }
+-    float tmp[8];_mm256_storeu_ps(tmp,vmax);float mx=0.0f;for(int j=0;j<8;j++)if(tmp[j]>mx)mx=tmp[j];
+-    for(;i<n;i++){float v=x[i];if(leaky&&v<0)v*=alpha;float a=fabsf(v);if(a>mx)mx=a;}
+-    const float sx=mx>0.0f?mx/127.0f:1.0f, inv=1.0f/sx;
+-    const __m256 vinv=_mm256_set1_ps(inv);const __m256i vlo=_mm256_set1_epi32(-127),vhi=_mm256_set1_epi32(127),vbias=_mm256_set1_epi32(128);
++    const __m256 vinv=_mm256_set1_ps(inv);
++    const __m256i vlo=asym?_mm256_setzero_si256():_mm256_set1_epi32(-127);
++    const __m256i vhi=asym?_mm256_set1_epi32(255):_mm256_set1_epi32(127);
++    const __m256i vzp=_mm256_set1_epi32(zp);
+     for(size_t c=0;c<C;c++){
+         unsigned char *qc=q+c*Tp; const float *xc=x+c*T;
+-        if(pad)memset(qc,128,pad);
++        if(pad)memset(qc,zp,pad);
+         size_t t=0;
+         for(;t+8<=T;t+=8){
+             __m256 v=_mm256_loadu_ps(xc+t);
+             if(leaky){__m256 pos=_mm256_max_ps(v,zero),neg=_mm256_min_ps(v,zero);v=_mm256_add_ps(pos,_mm256_mul_ps(neg,av));}
+             __m256i z=_mm256_cvtps_epi32(_mm256_mul_ps(v,vinv));
+-            z=_mm256_max_epi32(z,vlo);z=_mm256_min_epi32(z,vhi);z=_mm256_add_epi32(z,vbias);
++            if(asym){
++                z=_mm256_add_epi32(z,vzp);
++                z=_mm256_max_epi32(z,vlo);z=_mm256_min_epi32(z,vhi);
++            }else{
++                z=_mm256_max_epi32(z,vlo);z=_mm256_min_epi32(z,vhi);
++                z=_mm256_add_epi32(z,vzp);
++            }
+             __m128i a=_mm256_castsi256_si128(z),b=_mm256_extracti128_si256(z,1);
+             __m128i w=_mm_packs_epi32(a,b);__m128i bytes=_mm_packus_epi16(w,_mm_setzero_si128());
+             _mm_storel_epi64((__m128i*)(qc+pad+t),bytes);
+         }
+-        for(;t<T;t++){float v=xc[t];if(leaky&&v<0)v*=alpha;int z=(int)lrintf(v*inv);if(z>127)z=127;if(z<-127)z=-127;qc[pad+t]=(unsigned char)(z+128);}
+-        if(pad)memset(qc+pad+T,128,pad);
++        for(;t<T;t++){
++            float v=xc[t];if(leaky&&v<0)v*=alpha;
++            long z=lrintf(v*inv)+zp;
++            if(asym){if(z<0)z=0;if(z>255)z=255;}else{if(z<1)z=1;if(z>255)z=255;}
++            qc[pad+t]=(unsigned char)z;
++        }
++        if(pad)memset(qc+pad+T,zp,pad);
+     }
++    if(zero_point)*zero_point=zp;
+     return sx;
+ }
+ 
+@@ -73,11 +115,18 @@
+     if(Tout&7u)return -4;
+     const size_t K4=(Cin*K+3u)/4u,Tblocks=Tout/8u,Tp=Tin+2u*pad;
+     const float *wscale=(const float*)blob;
+-    const int *corr=(const int*)(blob+Cout*sizeof(float));
++    const int *corr_base=(const int*)(blob+Cout*sizeof(float));
+     const signed char *wpack=(const signed char*)(blob+2u*Cout*sizeof(float));
++    const int asym=vnni_asym_enabled(); int zp=128;
+     double a=vnni_now_ms();
+-    const float sx=quantize_u8_padded_avx2(x,qx,Cin,Tin,pad,fuse_leaky,alpha);
++    const float sx=quantize_u8_padded_avx2(x,qx,Cin,Tin,pad,fuse_leaky,alpha,asym,&zp);
+     for(size_t oc=0;oc<Cout;oc++)scales[oc]=sx*wscale[oc];
++    const int *corr=corr_base; int *corr_dyn=NULL;
++    if(asym && zp!=128){
++        corr_dyn=(int*)alloca(Cout*sizeof(int));
++        for(size_t oc=0;oc<Cout;oc++)corr_dyn[oc]=(corr_base[oc]/128)*zp;
++        corr=corr_dyn;
++    }
+     /* M40.1: precompute flattened reduction offsets once, then let the ASM
+        packer transpose four contiguous 8-byte source vectors into one
+        32-byte VNNI block. qx already includes 128-valued zero-point halos. */

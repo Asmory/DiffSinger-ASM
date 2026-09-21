@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: Native (${{ matrix.compiler }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    env:
+      CC: ${{ matrix.compiler }}
+      PYTHON: python
+      CFLAGS: -O3 -Wall -Wextra -std=c11 -mavx2 -mfma
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check numpy
+
+      - name: Build and validate stable engine ABI
+        run: make -j2 engine-check
+
+      - name: Run core assembly tests
+        run: make -j2 test
+
+      - name: Run synthetic graph parity gates
+        run: make -j2 m35-check m38-check m58-check
+
+      - name: Build distributable archive
+        if: matrix.compiler == 'gcc'
+        run: make -j2 package VERSION="ci-${GITHUB_SHA::12}"
+
+      - name: Upload Linux x86-64 archive
+        if: matrix.compiler == 'gcc'
+        uses: actions/upload-artifact@v4
+        with:
+          name: diffsinger-asm-linux-x86_64
+          path: |
+            release/*.tar.gz
+            release/*.sha256
+          if-no-files-found: error
+          retention-days: 14

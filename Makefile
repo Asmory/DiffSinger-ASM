@@ -4,8 +4,10 @@ CFLAGS ?= -O3 -Wall -Wextra -std=c11 -march=native
 CPPFLAGS ?= -Iinclude -Isrc/runtime
 LDFLAGS ?= -lm
 BUILD := build
+DIST := release
 KDIR := src/kernels/x86_64
 RDIR := src/runtime
+VERSION ?= $(shell git describe --tags --always --dirty)
 
 # M31 realtime sprint defaults for the target i5-13420H P-core topology.
 # Override on the make command line for another machine.
@@ -17,6 +19,7 @@ M31_VOCODER_ROUNDS ?= 3
 M31_PROFILE_RUNS ?= 3
 
 .PHONY: all test bench engine engine-check engine-real-stream-check m6 m7 m7-bench m8 m8-bench m9 m9-bench m9-autotune m10 m10-bench m10-autotune m11 m11-bench m11-autotune m12 m12-bench m12-spin-bench m12-perf m13 m13-bench m13-kernel-bench m13-perf m14 m14-bench m14-perf m14-pytorch-check m15 m15-bench m15-perf m15-kernel-bench m15-pytorch-check m16 m16-bench m16-perf m16-pytorch-check m17 m17-bench m17-perf m17-pytorch-check m18 m18-bench m18-pytorch-check m19 m19-bench m19-pytorch-check m20 m20-bench m20-pytorch-check m20-fs2-front-check m20-postfs2-check m21 m21-bench m21-pytorch-check m21-condition-check m21-full-check m21-pack-check m22 m22-bench m22-check m23 m23-bench m23-check m23-model-check m24 m24-check m24-pack-check m25-deploy-check m29-check m30-check m31 m31-check m31-real-sprint pytorch-check bundle-check m7-pytorch-check m7-bundle-check m8-pytorch-check m9-pytorch-check m10-pytorch-check m11-pytorch-check m12-pytorch-check m13-pytorch-check verify clean m32 m32-check m32-real-kernel m33 m33-check m33-real-blocks m34 m34-check m34-real-ct
+.PHONY: package
 
 all: $(BUILD)/test_fused_glu $(BUILD)/test_fused_glu_m2 \
      $(BUILD)/test_depthwise_k31_prelu $(BUILD)/test_m4_lynxnet2_block \
@@ -180,7 +183,16 @@ $(BUILD)/libdsasm_m23.so: $(BUILD)/model_loader_runtime.o $(BUILD)/full_acoustic
 $(BUILD)/test_m23_model_loader: tests/test_m23_model_loader.c $(BUILD)/model_loader_runtime.o $(BUILD)/full_acoustic_runtime.o $(BUILD)/post_fs2_runtime.o $(BUILD)/aux_decoder_runtime.o $(BUILD)/fs2_front_runtime.o $(BUILD)/acoustic_runtime.o $(BUILD)/reflow_runtime.o $(BUILD)/lynxnet2_runtime.o $(BUILD)/threadpool.o $(BUILD)/conv1d_m32.o $(BUILD)/convtranspose_m33.o $(BUILD)/glu_m6.o $(BUILD)/linear_m4n16.o $(BUILD)/linear_residual_m4n16.o $(BUILD)/linear_m4n16_strided.o $(BUILD)/linear_residual_m4n16_strided.o $(BUILD)/linear_m4n16_idxstrided.o $(BUILD)/linear_residual_m4n16_idxstrided.o $(BUILD)/linear_n16_kblock.o $(BUILD)/layernorm.o $(BUILD)/dwconv_k31_tc.o $(BUILD)/dwconv_k31_tc_cstrided.o $(BUILD)/dwconv_k7_tc.o $(BUILD)/atan_glu_m7.o $(BUILD)/atan_glu_m9_strided.o $(BUILD)/add3_m7.o $(BUILD)/fs2_encoder_runtime.o $(BUILD)/dot_avx2.o $(BUILD)/layernorm_precise.o
 	$(CC) $(CPPFLAGS) $(CFLAGS) tests/test_m23_model_loader.c $(filter-out tests/test_m23_model_loader.c,$^) -o $@ -lm -pthread
 
-test: all
+CORE_TEST_BINS := $(BUILD)/test_fused_glu $(BUILD)/test_fused_glu_m2 \
+                  $(BUILD)/test_depthwise_k31_prelu $(BUILD)/test_m4_lynxnet2_block \
+                  $(BUILD)/test_m5_lynxnet2_block $(BUILD)/test_glu_m6 \
+                  $(BUILD)/test_linear_m6 $(BUILD)/test_linear_residual_m6 \
+                  $(BUILD)/test_m6_lynxnet2_block $(BUILD)/test_atan_glu_m7 \
+                  $(BUILD)/test_atan_glu_m9_strided $(BUILD)/test_m8_strided \
+                  $(BUILD)/test_m11_depthwise_cstrided $(BUILD)/test_m13_indexed \
+                  $(BUILD)/test_m15_kblock
+
+test: $(CORE_TEST_BINS)
 	./$(BUILD)/test_fused_glu
 	./$(BUILD)/test_fused_glu_m2
 	./$(BUILD)/test_depthwise_k31_prelu
@@ -799,8 +811,12 @@ $(BUILD)/test_engine_stream: tests/test_engine_stream.c $(BUILD)/libdsasm.so
 engine-check: $(BUILD)/test_engine_abi
 	./$(BUILD)/test_engine_abi
 	@if ldd $(BUILD)/libdsasm.so | grep -Eqi 'onnx|onnxruntime|dnnl|onednn|openvino|mkl|blas'; then echo 'ERROR: forbidden runtime backend dependency detected'; exit 1; else echo 'engine runtime purity: OK'; fi
+	@bad="$$(nm -D --defined-only $(BUILD)/libdsasm.so | awk '$$2 ~ /^[TW]$$/ { sub(/@@.*/, "", $$3); print $$3 }' | grep -Ev '^dsasm_engine_' || true)"; test -z "$$bad" || { echo "ERROR: unexpected public symbols:"; echo "$$bad"; exit 1; }
 
 engine: engine-check
+
+package: engine-check $(BUILD)/dsasm-acoustic $(BUILD)/dsasm-vocoder-m40
+	./tools/package-engine.sh "$(VERSION)" "$(DIST)"
 
 engine-real-stream-check: $(BUILD)/test_engine_stream
 	@test -n "$(ENGINE_REAL_ACOUSTIC)" -a -n "$(ENGINE_REAL_VOCODER)" || (echo 'usage: make engine-real-stream-check ENGINE_REAL_ACOUSTIC=/packed/acoustic ENGINE_REAL_VOCODER=/bucket/dir-or-file'; exit 2)

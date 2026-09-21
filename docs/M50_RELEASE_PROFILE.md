@@ -1,4 +1,4 @@
-# M50 release profile
+# M50 release profile (historical baseline)
 
 M50 freezes the perf-guided M45-M49 vocoder choices as production defaults:
 
@@ -17,3 +17,6 @@ Every setting is still overrideable by its environment variable.  The release
 runner compares implicit defaults against the explicit M49 profile, checks
 waveform parity, records P-core cycles when perf is available, and runs the
 native acoustic -> native vocoder E2E gate.
+
+The later persistent real-model E2E promotion supersedes these runtime
+defaults with `config/best-inference.env`; see `docs/PERFORMANCE.md`.

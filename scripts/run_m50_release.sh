@@ -38,14 +38,14 @@ run_case(){
   local tag="$1" explicit="$2" log="build/m50/${tag}.log" pf="build/m50/${tag}.perf"
   local -a E=(DSASM_GOLDEN_COS=0.999 DSASM_GOLDEN_SNR=25 DSASM_PROFILE_SHAPES=0)
   if [[ "$explicit" == 1 ]]; then
-    E+=(DSASM_PARALLEL_ADD=0 DSASM_CONVT_S8K16=1 DSASM_VNNI=k11 DSASM_VNNI_ASYM=0 DSASM_VNNI_CIN=128
+    E+=(DSASM_PARALLEL_ADD=1 DSASM_PARALLEL_LEAKY_COPY=1 DSASM_CONVT_S8K16=1 DSASM_VNNI=k117 DSASM_VNNI_ASYM=1 DSASM_VNNI_CIN=128,64
        DSASM_KSPEC=0 DSASM_K3_TMODE=24 DSASM_K7_T24=1 DSASM_K11_T24=1
-       DSASM_RANGE_T24=0 DSASM_VOCODER_T_TILE=504 DSASM_RESIDUAL_T24=1)
+       DSASM_RANGE_T24=1 DSASM_RANGE_RESIDUAL_T24=1 DSASM_VOCODER_T_TILE=2016 DSASM_RESIDUAL_T24=1)
   else
     # Prove the release defaults work without the tuning variables.
-    unset DSASM_PARALLEL_ADD DSASM_CONVT_S8K16 DSASM_VNNI DSASM_VNNI_ASYM DSASM_VNNI_CIN \
+    unset DSASM_PARALLEL_ADD DSASM_PARALLEL_LEAKY_COPY DSASM_CONVT_S8K16 DSASM_VNNI DSASM_VNNI_ASYM DSASM_VNNI_CIN \
           DSASM_KSPEC DSASM_K3_TMODE DSASM_K7_T24 DSASM_K11_T24 DSASM_RANGE_T24 \
-          DSASM_VOCODER_T_TILE DSASM_RESIDUAL_T24 || true
+          DSASM_RANGE_RESIDUAL_T24 DSASM_VOCODER_T_TILE DSASM_RESIDUAL_T24 || true
   fi
   printf '\n========== M50 %s explicit=%s ==========\n' "$tag" "$explicit"
   if ((${#PERF_ARGS[@]})); then
@@ -128,4 +128,4 @@ PY3
 printf '\n========== M50 FINAL ==========\n'
 grep -E '^  Add|^  Conv[[:space:]]|^  ConvTranspose|^  VNNI-|PURE-ASM vocoder:|parity max_abs=' build/m50/profile.log || true
 for f in build/m50/e2e_*.log; do grep -E 'M40\.1 PURE CPU/C/ASM E2E|realtime RTF|PURE-ASM vocoder:|parity max_abs=' "$f" || true; done
-printf 'release-defaults: KSPEC=0 K3=24 K7=24 K11=24 RANGE=0 TILE=504 RESIDUAL=1 VNNI=k11@Cin128 symmetric\n'
+printf 'release-defaults: KSPEC=0 K3=24 K7=24 K11=24 RANGE=1 TILE=2016 RESIDUAL=1 ADD/LEAKY=1 VNNI=k117@Cin128,64 asymmetric\n'

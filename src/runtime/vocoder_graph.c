@@ -108,23 +108,16 @@ static inline const float *rptr(const DSAsmVocoderGraph *g,uint32_t id){
 }
 static int vnni_mode(void){
     const char *e=getenv("DSASM_VNNI");
-    /* M50 production default: quality-safe M40/M49 path. */
-    if(!e||!*e)return 1;
+    /* Promoted E2E default: quality-gated K7/K11 VNNI path. */
+    if(!e||!*e)return 2;
     if(!strcmp(e,"0")||!strcmp(e,"off"))return 0;
     if(!strcmp(e,"k11"))return 1;
     if(!strcmp(e,"1")||!strcmp(e,"auto")||!strcmp(e,"k117")||!strcmp(e,"k7k11"))return 2;
     return 0;
 }
-static unsigned vnni_cin_mask(void){
-    /* M44: an all-k711 bundle may carry VNNI weights for every HiFi-GAN
-       stage, while runtime can admit only quality-safe channel stages. */
-    static int init=0; static unsigned mask=0;
-    if(init)return mask;
-    init=1;
-    const char *e=getenv("DSASM_VNNI_CIN");
-    /* M50: only Cin=128 is quality-qualified by default.  "all" remains an
-       explicit lab opt-in for quantization experiments. */
-    if(!e||!*e){mask=1u<<3;return mask;}
+static unsigned parse_vnni_cin_mask(const char *e,unsigned fallback){
+    unsigned mask=0;
+    if(!e||!*e)return fallback;
     if(!strcmp(e,"all")){mask=0x1fu;return mask;}
     const char *p=e;
     while(*p){
@@ -137,21 +130,82 @@ static unsigned vnni_cin_mask(void){
     }
     return mask;
 }
+static unsigned vnni_cin_mask(void){
+    /* M44: an all-k711 bundle may carry VNNI weights for every HiFi-GAN
+       stage, while runtime can admit only quality-safe channel stages. */
+    static int init=0; static unsigned mask=0;
+    if(init)return mask;
+    init=1;
+    /* Cin=128 and Cin=64 passed the persistent real-model E2E quality gate.
+       "all" remains an explicit lab opt-in for quantization experiments. */
+    mask=parse_vnni_cin_mask(getenv("DSASM_VNNI_CIN"),(1u<<3)|(1u<<2));
+    return mask;
+}
 static int vnni_cin_allowed(size_t cin){
     unsigned bit=cin==16?1u<<0:cin==32?1u<<1:cin==64?1u<<2:cin==128?1u<<3:cin==256?1u<<4:0u;
     return bit && (vnni_cin_mask()&bit)!=0;
 }
+static int vnni_k7_cin_allowed(size_t cin){
+    const char *configured=getenv("DSASM_VNNI_K7_CIN");
+    if(!configured||!*configured)return vnni_cin_allowed(cin);
+    unsigned bit=cin==16?1u<<0:cin==32?1u<<1:cin==64?1u<<2:cin==128?1u<<3:cin==256?1u<<4:0u;
+    return bit&&(parse_vnni_cin_mask(configured,0)&bit)!=0;
+}
+static int vnni_k7_op_allowed(const DSAsmVocoderGraph *g,const DSV35Op *op,size_t cin){
+    const char *configured=getenv("DSASM_VNNI_K7_OPS");
+    if(cin!=128u||!configured||!*configured)return 1;
+    unsigned long wanted=(unsigned long)(op-g->ops);
+    const char *p=configured;
+    while(*p){
+        char *end=NULL;unsigned long value=strtoul(p,&end,10);
+        if(end!=p&&value==wanted)return 1;
+        p=end==p?p+1:end;while(*p&&*p!=',')p++;if(*p==',')p++;
+    }
+    return 0;
+}
+static int vnni_extra_op_allowed(const DSAsmVocoderGraph *g,const DSV35Op *op){
+    const char *configured=getenv("DSASM_VNNI_EXTRA_OPS");
+    unsigned long wanted=(unsigned long)(op-g->ops);
+    /* The 32-frame stream gate promoted these six measured hot operators.
+       Other fixed shapes remain separate quality/performance strata. */
+    if(!configured){
+        if(g->h->frames!=32u)return 0;
+        return wanted==79u||wanted==77u||wanted==80u||
+               wanted==76u||wanted==74u||wanted==73u;
+    }
+    if(!*configured||!strcmp(configured,"off"))return 0;
+    const char *p=configured;
+    while(*p){
+        char *end=NULL;unsigned long value=strtoul(p,&end,10);
+        if(end!=p&&value==wanted)return 1;
+        p=end==p?p+1:end;while(*p&&*p!=',')p++;if(*p==',')p++;
+    }
+    return 0;
+}
 static int parallel_add_enabled(void){
     static int v=-1;
-    if(v<0){const char *e=getenv("DSASM_PARALLEL_ADD");v=(e&&strcmp(e,"0")!=0&&strcmp(e,"off")!=0);}
+    if(v<0){const char *e=getenv("DSASM_PARALLEL_ADD");v=!e||!*e||(strcmp(e,"0")!=0&&strcmp(e,"off")!=0);}
     return v;
 }
 
 static int op_uses_vnni(const DSAsmVocoderGraph*g,const DSV35Op*op){
     if(!g->vnni_available || !(op->flags&DSV40_CONV_VNNI))return 0;
+    const int extra=vnni_extra_op_allowed(g,op);
     int m=vnni_mode();size_t K=(size_t)op->p[3],Cin=(size_t)op->p[0];
-    if(!vnni_cin_allowed(Cin))return 0;
-    return (m==1 && K==11u) || (m>=2 && (K==7u||K==11u));
+    const char *configured=getenv("DSASM_VNNI");
+    const char *configured_cin=getenv("DSASM_VNNI_CIN");
+    /* Real 32/64-frame parity rejects the default K7 quantized stages. Keep
+       explicit lab overrides, but make the product default quality-safe. */
+    if((!configured||!*configured)&&g->h->frames<=64u&&m>=2)m=1;
+    /* Exact-request golden tests admit Cin64/K11 for the 32/64-frame stream
+       buckets, but reject it for the 384-frame batch bucket. Explicit masks
+       remain available for quality experiments on other model/workload strata. */
+    if(!extra){
+        if((!configured_cin||!*configured_cin)&&g->h->frames>64u&&Cin==64u)return 0;
+        if(K==7u){if(!vnni_k7_cin_allowed(Cin)||!vnni_k7_op_allowed(g,op,Cin))return 0;}
+        else if(!vnni_cin_allowed(Cin))return 0;
+    }
+    return extra || (m==1 && K==11u) || (m>=2 && (K==7u||K==11u));
 }
 static inline size_t dim4(const DSV35Tensor *t,int axis){
     int shift=4-(int)t->rank; int q=axis-shift; return q<0?1u:(size_t)t->dims[q];

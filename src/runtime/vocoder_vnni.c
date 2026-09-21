@@ -29,8 +29,8 @@ int ds_vocoder_vnni_available(void){
 }
 
 static int vnni_asym_enabled(void){
-    static int init=0,enabled=0;
-    if(!init){const char *e=getenv("DSASM_VNNI_ASYM");enabled=e&&strcmp(e,"0")!=0;init=1;}
+    static int init=0,enabled=1;
+    if(!init){const char *e=getenv("DSASM_VNNI_ASYM");enabled=!e||!*e||(strcmp(e,"0")!=0&&strcmp(e,"off")!=0);init=1;}
     return enabled;
 }
 

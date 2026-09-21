@@ -1,7 +1,23 @@
 {
-  "policy_version": 2,
-  "minimum_stable_improvement_percent": 3.0,
+  "policy_version": 3,
+  "minimum_stable_improvement_percent": 5.0,
   "baselines": {
+    "realtime32_45w": {
+      "name": "32-frame selective VNNI hot-six",
+      "architecture": "real-time-streaming",
+      "phase": "pre-service-worst-rtf",
+      "context": "i5-13420h-pl1-45w-performance-w6",
+      "tag": "realtime32-vnni-hot6-45w-20260922",
+      "baseline_max_worst_rtf": 1.453782,
+      "candidate_max_worst_rtf": 1.203178,
+      "stable_reduction_percent": 17.24,
+      "baseline_max_deadline_misses": 25,
+      "candidate_max_deadline_misses": 9,
+      "quality_cosine": 0.999688334,
+      "quality_snr_db": 32.05,
+      "samples": "benchmarks/artifacts/2026-09-22-realtime32-vnni-hot6-45w/samples.tsv",
+      "status": "verified"
+    },
     "e2e": {
       "name": "M58 all3711 plus asymmetric K7/K11 VNNI at Cin128/Cin64",
       "predecessor": "e2e-k117-asym-pass-20260921",

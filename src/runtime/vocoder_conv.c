@@ -11,10 +11,10 @@ static int m39_full_memset_enabled(void){
     return mode;
 }
 
-/* M50 release defaults, derived from M45-M49 perf-guided A/B. */
+/* Promoted persistent E2E defaults. */
 static int env_bool_default(const char *name,int def){const char *e=getenv(name);if(!e||!*e)return def;return strcmp(e,"0")!=0 && strcmp(e,"off")!=0;}
 static int kspec_enabled(void){static int v=-1;if(v<0)v=env_bool_default("DSASM_KSPEC",0);return v;}
-static int range_t24_enabled(void){static int v=-1;if(v<0)v=env_bool_default("DSASM_RANGE_T24",0);return v;}
+static int range_t24_enabled(void){static int v=-1;if(v<0)v=env_bool_default("DSASM_RANGE_T24",1);return v;}
 static int range_residual_t24_enabled(void){static int v=-1;if(v<0)v=env_bool_default("DSASM_RANGE_RESIDUAL_T24",1);return v;}
 static int k7_t24_enabled(void){static int v=-1;if(v<0)v=env_bool_default("DSASM_K7_T24",1);return v;}
 static int k11_t24_enabled(void){static int v=-1;if(v<0)v=env_bool_default("DSASM_K11_T24",1);return v;}
@@ -22,7 +22,7 @@ static int k3_tmode(void){static int v=-1;if(v>=0)return v;const char *e=getenv(
 
 static int parallel_leaky_copy_enabled(void){
     static int v=-1;
-    if(v<0)v=env_bool_default("DSASM_PARALLEL_LEAKY_COPY",0);
+    if(v<0)v=env_bool_default("DSASM_PARALLEL_LEAKY_COPY",1);
     return v;
 }
 static size_t parallel_leaky_copy_min_floats(void){

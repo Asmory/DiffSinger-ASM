@@ -9,7 +9,7 @@ def attr_dict(node, onnx):
 
 def main():
     ap=argparse.ArgumentParser(description='Compile fixed-shape NSF-HiFiGAN ONNX to DSVOC35 pure-native bundle')
-    ap.add_argument('onnx');ap.add_argument('--frames',type=int,default=48);ap.add_argument('--out',required=True);ap.add_argument('--work',required=True);ap.add_argument('--seed',type=int,default=35);ap.add_argument('--enable-residual-fusion',action='store_true',help='M38 experiment; disabled by default in M39 because target-machine A/B regressed');ap.add_argument('--residual-scope',choices=['none','full64','k7ge128'],default='none',help='M49: fuse Conv->Add only for full/channel-owner Cout>=64 K3/K7/K11 t24 shapes');ap.add_argument('--vnni-scope',choices=['none','stage128','all-k711'],default='stage128',help='M40: embed prequantized AVX-VNNI weights; runtime DSASM_VNNI selects whether to execute them')
+    ap.add_argument('onnx');ap.add_argument('--frames',type=int,default=48);ap.add_argument('--out',required=True);ap.add_argument('--work',required=True);ap.add_argument('--seed',type=int,default=35);ap.add_argument('--enable-residual-fusion',action='store_true',help='M38 experiment; disabled by default in M39 because target-machine A/B regressed');ap.add_argument('--residual-scope',choices=['none','full64','k7ge128','all3711'],default='none',help='residual fusion scope; all3711 enables every aligned K3/K7/K11 residual stage including 2-D late stages');ap.add_argument('--vnni-scope',choices=['none','stage128','all-k711'],default='stage128',help='M40: embed prequantized AVX-VNNI weights; runtime DSASM_VNNI selects whether to execute them')
     a=ap.parse_args()
     import onnx, onnxruntime as ort
     from onnx import numpy_helper, helper, TensorProto
@@ -78,10 +78,11 @@ def main():
         if n.op_type!='Conv' or not n.output or n.input[1] not in init: continue
         W=np.asarray(init[n.input[1]])
         if W.ndim!=3 or int(W.shape[0])<8 or int(W.shape[0])%8: continue
-        if a.residual_scope in ('full64','k7ge128'):
+        if a.residual_scope in ('full64','k7ge128','all3711'):
             Cout,Cin,K=map(int,W.shape)
             if a.residual_scope=='full64' and (Cout<64 or K not in (3,7,11)): continue
             if a.residual_scope=='k7ge128' and (Cout<128 or K!=7): continue
+            if a.residual_scope=='all3711' and K not in (3,7,11): continue
             if n.output[0] not in shapes or int(shapes[n.output[0]][-1])%24: continue
         cns=consumers.get(n.output[0],[])
         if len(cns)!=1: continue

@@ -1,5 +1,8 @@
 # DiffSinger-ASM M40.1 — Fast AVX-VNNI Pack + Relative Quality Gate
 
+Current M55/M58 fusion status, the 3% stability gate, instrumented results and
+reproduction commands are recorded in [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+
 M40.1 keeps M40 selective stage128 K7/K11 AVX-VNNI, but replaces the scalar activation im2col packer with a handwritten x86-64 pack kernel. Quantized activations are written into a zero-point-padded NCT buffer; a precomputed reduction-offset map lets the packer load four contiguous 8-byte vectors and transpose them directly into each 32-byte `vpdpbusd` block.
 
 It also changes INT8 quality validation from a fixed absolute max-error gate to configurable cosine/SNR gates (`DSASM_GOLDEN_COS`, `DSASM_GOLDEN_SNR`). The e2e harness now runs acoustic and ORT golden once, then benchmarks k11-only and k7+k11 on the exact same mel/f0. Production runtime remains C + handwritten x86-64 ASM only.

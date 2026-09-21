@@ -15,6 +15,7 @@ static int m39_full_memset_enabled(void){
 static int env_bool_default(const char *name,int def){const char *e=getenv(name);if(!e||!*e)return def;return strcmp(e,"0")!=0 && strcmp(e,"off")!=0;}
 static int kspec_enabled(void){static int v=-1;if(v<0)v=env_bool_default("DSASM_KSPEC",0);return v;}
 static int range_t24_enabled(void){static int v=-1;if(v<0)v=env_bool_default("DSASM_RANGE_T24",0);return v;}
+static int range_residual_t24_enabled(void){static int v=-1;if(v<0)v=env_bool_default("DSASM_RANGE_RESIDUAL_T24",1);return v;}
 static int k7_t24_enabled(void){static int v=-1;if(v<0)v=env_bool_default("DSASM_K7_T24",1);return v;}
 static int k11_t24_enabled(void){static int v=-1;if(v<0)v=env_bool_default("DSASM_K11_T24",1);return v;}
 static int k3_tmode(void){static int v=-1;if(v>=0)return v;const char *e=getenv("DSASM_K3_TMODE");if(!e||!*e)return v=24;int x=atoi(e);return v=(x==16||x==24)?x:0;}
@@ -45,7 +46,7 @@ static void run_padded_conv(
         j.x=x_padded;j.w=w_packed;j.b0=bias;j.residual=residual;j.y=y;
         j.M=Tout;j.N=Cout;j.K=Cin;
         j.P=K;j.Q=Tp;j.R=dilation;j.S=pack_width;
-        j.T=(kspec_enabled()?1u:0u) | (range_t24_enabled()?2u:0u);
+        j.T=(kspec_enabled()?1u:0u) | (range_t24_enabled()?2u:0u) | (range_residual_t24_enabled()?4u:0u);
         ds_threadpool_run(pool,&j);
     }else if(pack_width==8){
         const int k3mode=k3_tmode();

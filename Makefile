@@ -1147,3 +1147,17 @@ m40-1-real-e2e: $(BUILD)/dsasm-vocoder-m40 $(BUILD)/dsasm-acoustic
 	$(PYTHON) tools/run_native_e2e_m40_1.py --packed-acoustic $(BUILD)/m40_1_e2e_model --acoustic-cli ./$(BUILD)/dsasm-acoustic --vocoder-bundle $(BUILD)/m40_1_e2e/nsf_hifigan.dsv35 --vocoder-cli ./$(BUILD)/dsasm-vocoder-m40 --vocoder-onnx "$(MODEL_DIR)/dsvocoder/nsf_hifigan.onnx" --speaker-emb "$(SPEAKER_EMB)" --language-id 4 --depth 0.6 --steps $(M40_1_STEPS) --workers $(M40_1_E2E_WORKERS) --rounds $(M40_1_E2E_ROUNDS) --modes k11,k117 --work $(BUILD)/m40_1_e2e/run
 
 m40-1: m40-1-check
+
+# M58: bit-exact late-stage range + residual-store kernels. Performance is
+# measured separately by scripts/run_m58_micro.sh so correctness tests do not
+# become flaky under system load.
+.PHONY: m58-check m58-bench
+
+$(BUILD)/test_m58_range_residual: tools/test_m58_range_residual.c $(BUILD)/conv1d_m39_kspec.o $(BUILD)/conv1d_m38_range_residual.o
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(BUILD)/conv1d_m39_kspec.o $(BUILD)/conv1d_m38_range_residual.o -o $@ $(LDFLAGS)
+
+m58-check: $(BUILD)/test_m58_range_residual
+	./$(BUILD)/test_m58_range_residual
+
+m58-bench: $(BUILD)/test_m58_range_residual
+	bash scripts/run_m58_micro.sh

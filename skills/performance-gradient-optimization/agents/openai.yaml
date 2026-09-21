@@ -1,4 +1,4 @@
 interface:
   display_name: "Performance Gradient Optimization"
-  short_description: "Instrument-driven performance optimization gates"
-  default_prompt: "Use $performance-gradient-optimization to profile, compare, and promote this performance change."
+  short_description: "General instrument-driven optimization method"
+  default_prompt: "Use $performance-gradient-optimization to define, measure, and iterate on this performance objective."

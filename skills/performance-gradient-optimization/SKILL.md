@@ -1,118 +1,127 @@
 ---
 name: performance-gradient-optimization
-description: Run instrument-driven iterative performance optimization with independent E2E baselines, weighted subsystem diagnostics, stable promotion gates, and reproducible milestone archives. Use when profiling bottlenecks, comparing performance candidates, evolving streaming or batch runtimes, or deciding whether a measured optimization should become the new baseline.
+description: Optimize measurable system performance through instrument-guided experiments, stable champion baselines, explicit promotion gates, weighted subsystem models, and reproducible archives. Use for latency, throughput, CPU, memory, I/O, energy, capacity, or cost optimization; do not use as a substitute for correctness debugging.
 ---
 
 # Performance Gradient Optimization
 
-Treat optimization as measured descent against the best accepted baseline, not
-as a sequence of plausible source edits. Preserve correctness and compare only
-like-for-like workloads.
+Use "gradient" as an experimental method: measure the current system, perturb
+one controllable direction, observe the result, and keep only stable progress.
+Do not assume the objective is differentiable or that a symbolic performance
+model is complete.
 
-## Establish the contract
+## Define the optimization contract
 
-Before changing code, record:
+Before changing the implementation, record:
 
-- architecture and workload stratum;
-- current best accepted baseline commit/tag;
-- fixed model, input, shape or block size, worker topology, affinity, build
-  flags, environment, and machine fingerprint;
-- correctness gate, primary E2E metric, stability guards, and minimum promotion
-  step.
+- the workload and its strata, such as request class, input shape, concurrency,
+  data set, machine class, and operating regime;
+- one primary objective, its direction, and units;
+- hard constraints such as correctness, quality, tail latency, memory limits,
+  deadlines, compatibility, or cost ceilings;
+- a minimum meaningful improvement step large enough to exceed measurement
+  noise and engineering cost;
+- the warm-up, sampling, pairing, and stability protocol.
 
-Keep real-time streaming and block batch baselines independent. A result from
-one architecture cannot promote the other.
+Use lexicographic decisions by default: hard constraints first, then the primary
+objective, then secondary regression guards. Use a Pareto frontier only when
+the product genuinely has multiple coequal objectives. Never hide a failed hard
+constraint inside a weighted average.
 
-When working in DiffSinger-ASM, read
-`docs/DUAL_ARCHITECTURE_OPTIMIZATION.md`,
-`docs/STREAMING_PERFORMANCE.md`,
-`docs/BATCH_PERFORMANCE.md`, and
-`docs/RUNTIME_IMPLEMENTATION_POLICY.md` before editing runtime code. Those
-project documents override generic defaults in this skill.
+Maintain a separate champion baseline for every incompatible workload stratum
+and objective. Compare a candidate only with the current champion for that same
+contract, not with an arbitrary historical version. When hardware, software,
+input distribution, or operating conditions change materially, establish a
+fingerprinted context baseline instead of mixing populations.
 
-## Measure before hypothesizing
+## Instrument before choosing a direction
 
-Do not choose a target from source structure, nominal FLOPs, intuition, or one
-fast sample. Instrument the exact E2E workload first.
+Do not infer hotspots from source size, nominal operation counts, intuition, or
+a single fast sample. Measure the exact target workload and descend only as far
+as needed to explain the dominant cost:
 
-Collect only the depth of evidence needed to localize the unexplained cost:
+1. primary outcome and end-to-end wall time;
+2. resource totals such as CPU time, memory, I/O, energy, and occupied capacity;
+3. stage, component, operator, query, or hot-shape timing;
+4. sampling profiles, traces, system-call evidence, and hardware counters when
+   higher-level measurements leave an unexplained residual.
 
-1. monotonic E2E wall time;
-2. stage, operator, and hot-shape timers;
-3. process CPU time and occupied-core estimates where CPU burden matters;
-4. sampling profiles and hardware counters such as cycles, instructions, cache
-   misses, branch misses, and frequency residency when timers leave a residual.
+Correctness and other hard constraints are checked before performance evidence
+is admitted. Instrumented runs locate work; separate minimally instrumented
+paired or interleaved runs decide promotion. Record profiler overhead and blind
+spots. Missing measurements remain unknown rather than receiving guessed
+weights or invented causal explanations.
 
-Run correctness/parity before admitting timing evidence. Instrumented runs
-locate work; separate paired or interleaved uninstrumented runs decide
-promotion. Record profiler overhead and blind spots. Never invent missing
-weights or causal explanations.
+## Run one optimization step
 
-## Apply the architecture gate
+1. Reproduce the champion under the current contract.
+2. Use measured evidence to select the largest controllable opportunity.
+3. State the expected mechanism and the metrics that could falsify it.
+4. Change one implementation or policy direction and retain a control path.
+5. Run correctness and constraint checks.
+6. Collect stable paired or interleaved baseline/candidate samples.
+7. Promote, reject, or refine the measurement model from the observed result.
 
-For block batch work, compare complete E2E aggregate wall RTF with the best
-accepted batch baseline. Use thermally stable paired or interleaved samples.
-Require at least a 5% improvement plus the project's tail, variability, and
-correctness guards.
+Choose sample count and summary statistics for the objective. Throughput may be
+well represented by a central estimate; service latency may require a maximum,
+deadline-miss count, or high percentile. Include warm-up and sustained behavior
+when caches, allocators, JITs, thermal limits, frequency scaling, or background
+work can change the distribution. The fastest sample is diagnostic, not a
+promotion result.
 
-For real-time streaming, first require every thermally steady measured region
-to have RTF below 1 and zero callback deadline misses. Median RTF is not an
-acceptance metric. Once that service gate passes, descend a CPU-load staircase:
-use the largest CPU-RTF from at least three hot runs per side and require at
-least a 5% reduction while every run keeps the service gate. Test multi-track
-capacity as a separate integer staircase; every track must pass independently.
+Increase sample count or improve experimental control when the confidence
+interval or run-to-run variation is too large to distinguish the required step.
+Do not lower the gate merely to accept a noisy candidate.
 
-Do not average incompatible machines, models, shapes, worker layouts, or
-thermal regimes. Create a fingerprinted context baseline when the observed
-population changes; a symbolic causal proof is not required.
+## Use subsystem models to diagnose misses
 
-## Use child metrics only to diagnose failed E2E
+The primary outcome is authoritative. If it passes, subsystem metrics are
+informational and cannot veto promotion unless they are declared hard guards.
 
-If E2E passes, child metrics are informational and cannot veto promotion.
+If the primary outcome fails, use measured subsystem results to choose the next
+direction. For an additive parent cost, a useful predicted ratio is:
 
-If E2E fails:
+`sum(weight_i * candidate_i / baseline_i)`
 
-1. derive each child weight from its measured share of the parent profile;
-2. adjust confidence or controllability only with recorded evidence;
-3. prioritize a failing, high-impact child path;
-4. require the weighted child model to pass before rerunning the expensive E2E
-   gate.
+Derive each weight from the same parent profile and normalize it over the
+modeled interval. Record confidence and controllability adjustments. A count of
+winning subsystems is not a valid substitute for weights.
 
-A useful predicted ratio is `sum(weight_i * candidate_i / baseline_i)`, with
-weights from one parent profile and normalized for the modeled interval. Do not
-replace this with a count of winning child cases.
+Do not force additive weighting onto critical paths, parallel stages, queueing,
+memory-pressure effects, or other nonlinear systems. Model their actual
+composition, or treat the subsystem data only as ranking evidence.
 
-If the weighted child model passes but E2E still fails, instrument the
-unmodeled interval. Add a newly observed factor as a child baseline only when it
-is repeatably measurable and changing it helps the E2E gate pass. Preserve it
-as an empirical context baseline even when complete causal attribution is not
-available.
+If the subsystem model predicts success but the primary outcome still fails,
+instrument the unmodeled residual. Promote a newly observed factor to a tracked
+sub-baseline when it is repeatably measurable and acting on it improves the
+primary gate. Full causal attribution is useful but not mandatory; the context
+and observed distribution must be preserved.
 
-## Iterate narrowly
+When known subsystems no longer offer meaningful progress, expand measurement
+coverage before selecting another target. This is model refinement, not a
+license to guess.
 
-Keep a control path or switch for paired comparison. Prefer one attributable
-kernel or scheduling-policy change per candidate. When correctness fails,
-discard its timings and repair that path. When a child fails, target that child;
-when it cannot improve further, expand measurement instead of guessing another
-hotspot.
+## Promote and preserve
 
-For DiffSinger-ASM online CPU inference, neural-network arithmetic belongs in
-assembly. C is limited to loading, validation, dispatch, scheduling, buffers,
-cancellation, and callbacks. Python is offline-only for conversion, golden
-generation, parity, and benchmark analysis. Unsupported graph branches fail
-explicitly; do not add numerical C or Python fallbacks.
+Promote only when the candidate:
 
-## Promote and archive
+- passes correctness and every hard constraint;
+- improves the primary objective by at least the declared step;
+- satisfies the declared stability and regression guards;
+- is compared under the same contract as its champion.
 
-Promote only a stable E2E pass against the historical best for the same
-architecture and stratum. Then, in the same iteration:
-
-- update the baseline record and performance document;
-- preserve exact commands, raw samples, profiler evidence, environment, CPU
-  topology, model/input hashes, correctness results, and summaries;
-- commit only intended files, create an annotated tag, build the archive, and
-  record its SHA-256;
-- verify the archive can identify the source commit and reproduce the command.
+On promotion, update the champion immediately and preserve the exact commands,
+raw samples, summaries, profiles, environment, workload and artifact hashes,
+source revision, and tool versions. Commit the intended change and evidence;
+when the project uses releases or milestone archives, tag it, archive it, record
+the archive checksum, and verify recovery instructions.
 
 Rejected candidates may retain diagnostic evidence, but they do not move,
-tag, or overwrite the accepted baseline.
+overwrite, or inherit the champion label.
+
+## Respect project overlays
+
+Project instructions define concrete objectives, thresholds, workloads,
+implementation boundaries, tools, and archive formats. Read them before acting
+and treat them as stricter overlays on this method. Do not turn one project's
+threshold or architecture into a universal rule.

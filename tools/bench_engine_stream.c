@@ -172,14 +172,14 @@ static float *read_f32(const char *path, size_t *count) {
 
 static void usage(const char *program) {
     fprintf(stderr, "usage: %s ACOUSTIC_DIR VOCODER_DIR SPEAKER_EMB "
-        "[--frames 32] [--regions 25] [--warmup 3] [--workers 8] "
+        "[--frames 32] [--regions 25] [--warmup 10] [--workers 4] "
         "[--bucket 32] [--steps 4] [--overlap 8] [--golden PCM.f32]\n",
         program);
 }
 
 int main(int argc, char **argv) {
     if (argc < 4) { usage(argv[0]); return 2; }
-    size_t frames = 32, regions = 25, warmup = 3, workers = 8;
+    size_t frames = 32, regions = 25, warmup = 10, workers = 4;
     size_t bucket = 32, steps = 4, overlap = 8;
     const char *golden_path = NULL;
     for (int i = 4; i < argc; i++) {

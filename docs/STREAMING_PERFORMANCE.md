@@ -24,7 +24,7 @@ Build and run the instrument with:
 ```sh
 make build/bench_engine_stream
 ./build/bench_engine_stream PACKED_ACOUSTIC VOCODER_BUCKET_DIR SPEAKER_EMB \
-  --frames 32 --regions 25 --warmup 3 --workers 8 --bucket 32 --steps 4 \
+  --frames 32 --regions 25 --warmup 10 --workers 4 --bucket 32 --steps 4 \
   --golden STREAM32_GOLDEN_PCM_F32
 ```
 
@@ -83,8 +83,8 @@ establishes a new streaming baseline and is not compared with M55/M58.
 
 ## Current 32-frame champion
 
-The accepted service champion for the 45 W package-power context uses 34
-quality-gated VNNI operators and six workers. Starting from the hot-twelve
+The accepted CPU-load champion for the 45 W package-power context uses 34
+quality-gated VNNI operators and four workers. Starting from the hot-twelve
 champion, profiling admitted the `Cin256/K7` and `Cin64/K7` groups, then a
 per-op quality probe selected 10 of the 12 `Cin32/K7/K11` operators. Ops 139
 and 155 remain FP32 because the complete Cin32 group failed the cosine gate.
@@ -95,18 +95,20 @@ reproduced hot-twelve: 1.275864  0.973321  0.963818  max=1.275864
 hot-thirty-four:       0.947715  0.916095  0.921636  max=0.947715
 ```
 
-The candidate improves 5.37% over the archived hot-twelve champion maximum of
+The 34-op six-worker milestone improved 5.37% over the archived hot-twelve champion maximum of
 1.001437. Every candidate run has worst RTF below 1 and zero deadline misses.
 Exact-request ONNX-vocoder parity passes at cosine 0.999291538 and SNR 28.49 dB.
-The real-time objective therefore switches to the CPU-load staircase: the new
-worst CPU-RTF champion is 2.957324, and future candidates must reduce that by at
-least 5% while preserving worst RTF below 1 and zero misses in every run.
+That milestone switched the objective to CPU load. Reducing the worker count
+from six to four then lowered maximum CPU-RTF from 2.957324 to 2.391249, a
+19.14% reduction, while three candidate runs retained zero misses and maximum
+worst RTF 0.996841. Future candidates must reduce CPU-RTF by at least another
+5% while preserving the service target in every run.
 
 This context is distinct from the historical 28 W measurements. Its fingerprint
 includes PL1=45 W, a 55.967744 s PL1 window, the performance platform profile,
-intel_pstate EPP=performance, six workers, 10 warm-up regions, and 25 measured
+intel_pstate EPP=performance, four workers, 10 warm-up regions, and 25 measured
 regions. Raw evidence and hashes are stored under
-`benchmarks/artifacts/2026-09-22-realtime32-vnni-hot34-service-45w/`. The predecessor
+`benchmarks/artifacts/2026-09-22-realtime32-w4-cpu-load-45w/`. The predecessor
 artifact remains preserved under its own tag and directory.
 
 The exact-request waveform golden must match the acoustic implementation used

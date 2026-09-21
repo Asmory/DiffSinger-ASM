@@ -2,6 +2,7 @@
 #include "dsasm_vocoder.h"
 #include "dsasm_kernels.h"
 #include "threadpool_internal.h"
+#include <cpuid.h>
 #include <immintrin.h>
 #include <math.h>
 #include <stdint.h>
@@ -17,8 +18,11 @@ static inline double vnni_now_ms(void){
 
 int ds_vocoder_vnni_available(void){
 #if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
+    unsigned int eax,ebx,ecx,edx;
     __builtin_cpu_init();
-    return __builtin_cpu_supports("avxvnni") != 0;
+    if(!__builtin_cpu_supports("avx2")||!__builtin_cpu_supports("fma"))return 0;
+    if(!__get_cpuid_count(7,1,&eax,&ebx,&ecx,&edx))return 0;
+    return (eax&(1u<<4))!=0; /* CPUID.7.1:EAX[4] is AVX-VNNI. */
 #else
     return 0;
 #endif

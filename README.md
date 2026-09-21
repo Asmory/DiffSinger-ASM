@@ -118,6 +118,16 @@ cd DiffSinger-ASM
 make -j"$(nproc)" build/dsasm-acoustic build/dsasm-vocoder-m40
 ```
 
+For an in-process host such as OpenUtau, build the stable engine ABI instead:
+
+```bash
+make -j"$(nproc)" engine-check
+```
+
+This produces `build/libdsasm.so`. The opaque engine keeps models, one shared
+worker pool, and inference buffers resident, then publishes vocoder output as
+contiguous PCM callbacks. See [the engine ABI and frame-bucket contract](docs/ENGINE_ABI.md).
+
 Create an environment for offline packing:
 
 ```bash

@@ -76,6 +76,7 @@ struct DSAsmVocoderGraph {
     int vnni_available;
     double vnni_pack_ms,vnni_kernel_ms;
     DSAsmThreadPool *pool;
+    int owns_pool;
 };
 
 typedef struct {
@@ -288,7 +289,7 @@ static int run_op(DSAsmVocoderGraph *g,const DSV35Op *op){
     }
 }
 
-DSAsmVocoderGraph *ds_vocoder_graph_load(const char *path,size_t workers){
+static DSAsmVocoderGraph *load_graph(const char *path,DSAsmThreadPool *pool,size_t workers){
     int fd=open(path,O_RDONLY);if(fd<0)return NULL;struct stat st;if(fstat(fd,&st)){close(fd);return NULL;}
     void *map=mmap(NULL,(size_t)st.st_size,PROT_READ,MAP_PRIVATE,fd,0);if(map==MAP_FAILED){close(fd);return NULL;}
     const DSV35Header*h=(const DSV35Header*)map;
@@ -310,9 +311,13 @@ DSAsmVocoderGraph *ds_vocoder_graph_load(const char *path,size_t workers){
     if(g->vnni_qx_bytes&&posix_memalign((void**)&g->vnni_qx,64,g->vnni_qx_bytes)){ds_vocoder_graph_free(g);return NULL;}
     if(g->vnni_xpack_bytes&&posix_memalign((void**)&g->vnni_xpack,64,g->vnni_xpack_bytes)){ds_vocoder_graph_free(g);return NULL;}
     if(g->vnni_scale_count&&posix_memalign((void**)&g->vnni_scales,64,g->vnni_scale_count*sizeof(float))){ds_vocoder_graph_free(g);return NULL;}
-    g->pool=ds_threadpool_create(workers?workers:8);if(!g->pool){ds_vocoder_graph_free(g);return NULL;}return g;
+    if(pool){g->pool=pool;g->owns_pool=0;}
+    else {g->pool=ds_threadpool_create(workers?workers:8);g->owns_pool=1;}
+    if(!g->pool){ds_vocoder_graph_free(g);return NULL;}return g;
 }
-void ds_vocoder_graph_free(DSAsmVocoderGraph*g){if(!g)return;if(g->pool)ds_threadpool_destroy(g->pool);free(g->vnni_scales);free(g->vnni_xpack);free(g->vnni_qx);free(g->conv_ws);free(g->arena);if(g->map&&g->map!=MAP_FAILED)munmap(g->map,g->map_size);if(g->fd>=0)close(g->fd);free(g);}
+DSAsmVocoderGraph *ds_vocoder_graph_load(const char *path,size_t workers){return load_graph(path,NULL,workers);}
+DSAsmVocoderGraph *ds_vocoder_graph_load_with_pool(const char *path,DSAsmThreadPool *pool){if(!pool){errno=EINVAL;return NULL;}return load_graph(path,pool,0);}
+void ds_vocoder_graph_free(DSAsmVocoderGraph*g){if(!g)return;if(g->pool&&g->owns_pool)ds_threadpool_destroy(g->pool);free(g->vnni_scales);free(g->vnni_xpack);free(g->vnni_qx);free(g->conv_ws);free(g->arena);if(g->map&&g->map!=MAP_FAILED)munmap(g->map,g->map_size);if(g->fd>=0)close(g->fd);free(g);}
 size_t ds_vocoder_graph_frames(const DSAsmVocoderGraph*g){return g?(size_t)g->h->frames:0;}size_t ds_vocoder_graph_mel_bins(const DSAsmVocoderGraph*g){return g?(size_t)g->h->mel_bins:0;}size_t ds_vocoder_graph_samples(const DSAsmVocoderGraph*g){return g?(size_t)g->h->samples:0;}size_t ds_vocoder_graph_workers(const DSAsmVocoderGraph*g){return g&&g->pool?ds_threadpool_threads(g->pool):0;}
 
 int ds_vocoder_graph_infer(DSAsmVocoderGraph*g,const float*mel,const float*f0,float*wave,int profile){

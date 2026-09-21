@@ -2,6 +2,7 @@
 #define DSASM_VOCODER_GRAPH_H
 #include <stddef.h>
 #include <stdint.h>
+#include "dsasm_threadpool.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -9,6 +10,9 @@ extern "C" {
 typedef struct DSAsmVocoderGraph DSAsmVocoderGraph;
 
 DSAsmVocoderGraph *ds_vocoder_graph_load(const char *path, size_t workers);
+/* Loads a graph that borrows an existing pool. The caller must keep the pool
+   alive until after ds_vocoder_graph_free(). */
+DSAsmVocoderGraph *ds_vocoder_graph_load_with_pool(const char *path, DSAsmThreadPool *pool);
 void ds_vocoder_graph_free(DSAsmVocoderGraph *g);
 size_t ds_vocoder_graph_frames(const DSAsmVocoderGraph *g);
 size_t ds_vocoder_graph_mel_bins(const DSAsmVocoderGraph *g);

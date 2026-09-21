@@ -1,0 +1,6 @@
+DSASM_1.0 {
+    global:
+        dsasm_engine_*;
+    local:
+        *;
+};

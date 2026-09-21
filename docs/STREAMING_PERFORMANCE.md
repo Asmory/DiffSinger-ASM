@@ -83,25 +83,29 @@ establishes a new streaming baseline and is not compared with M55/M58.
 
 ## Current 32-frame champion
 
-The accepted pre-service champion for the 45 W package-power context uses six
-additional quality-gated VNNI operators (`79,77,80,76,74,73`) and six workers.
-Three uninstrumented interleaved pairs measured the following worst-region RTF:
+The accepted pre-service champion for the 45 W package-power context uses
+twelve additional quality-gated VNNI operators
+(`79,77,80,76,74,73,48,49,51,52,54,55`) and six workers. The last six are the
+profiled `Cin256/K11` group. Three uninstrumented interleaved pairs measured:
 
 ```text
-control:   1.453782  1.346785  1.318764  max=1.453782
-candidate: 1.175698  1.203178  1.145756  max=1.203178
+reproduced hot-six: 1.352409  1.007939  0.992979  max=1.352409
+hot-twelve:        0.977545  1.001437  0.984307  max=1.001437
 ```
 
-The maximum worst RTF fell by 17.24%, and the maximum deadline-miss count fell
-from 25 to 9. Exact-request ONNX-vocoder parity passed at cosine 0.999688334 and
-SNR 32.05 dB. The candidate remains in the pre-service phase because worst RTF
-is still above 1; CPU-RTF is diagnostic until the service target is crossed.
+The paired reduction is 25.95%. More conservatively, the candidate improves
+16.77% over the archived hot-six champion maximum of 1.203178. The maximum
+deadline-miss count is 1 versus 18 for the paired control and 9 for the archived
+champion. Exact-request ONNX-vocoder parity passes at cosine 0.999465810 and SNR
+29.71 dB. The candidate remains in the pre-service phase because one run is
+slightly above RTF 1; CPU-RTF is diagnostic until every run crosses the target.
 
 This context is distinct from the historical 28 W measurements. Its fingerprint
 includes PL1=45 W, a 55.967744 s PL1 window, the performance platform profile,
 intel_pstate EPP=performance, six workers, 10 warm-up regions, and 25 measured
 regions. Raw evidence and hashes are stored under
-`benchmarks/artifacts/2026-09-22-realtime32-vnni-hot6-45w/`.
+`benchmarks/artifacts/2026-09-22-realtime32-vnni-hot12-45w/`. The predecessor
+artifact remains preserved under its own tag and directory.
 
 The exact-request waveform golden must match the acoustic implementation used
 by the benchmark. When a validated acoustic implementation changes, preserve

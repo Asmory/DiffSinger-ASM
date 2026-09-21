@@ -1,0 +1,119 @@
+DSASM native vocoder op profile:
+  Add               12.065 ms
+  Sub                0.002 ms
+  Mul                0.238 ms
+  Div                0.874 ms
+  Mod                0.002 ms
+  LeakyRelu          1.355 ms
+  Tanh               0.242 ms
+  Sin                0.025 ms
+  Squeeze            0.010 ms
+  Transpose          0.113 ms
+  Slice              0.004 ms
+  Pad                0.003 ms
+  Conv             181.427 ms
+  ConvTranspose     15.108 ms
+  VNNI-pack          13.208 ms
+  VNNI-kernel        29.278 ms
+DSASM M41 hot Conv/ConvTranspose profile (descending):
+  #060 ConvT     5.335 ms  C=256x128 K=16 T=256->2048 stride=8 p=4
+  #068 Conv      4.530 ms  C=128x128 K=3 T=2048->2048 d=1 p=1 pack=8 path=FP32+leaky
+  #051 Conv      4.424 ms  C=256x256 K=11 T=256->256 d=3 p=15 pack=8 path=FP32+leaky
+  #054 Conv      4.330 ms  C=256x256 K=11 T=256->256 d=5 p=25 pack=8 path=FP32+leaky
+  #052 Conv      4.271 ms  C=256x256 K=11 T=256->256 d=1 p=5 pack=8 path=FP32+leaky
+  #113 Conv      3.954 ms  C=64x64 K=7 T=4096->4096 d=1 p=3 pack=8 path=FP32+leaky
+  #055 Conv      3.944 ms  C=256x256 K=11 T=256->256 d=1 p=5 pack=8 path=FP32+leaky
+  #049 Conv      3.905 ms  C=256x256 K=11 T=256->256 d=1 p=5 pack=8 path=FP32+leaky
+  #048 Conv      3.838 ms  C=256x256 K=11 T=256->256 d=1 p=5 pack=8 path=FP32
+  #095 ConvT     3.835 ms  C=128x64 K=4 T=2048->4096 stride=2 p=1
+  #087 Conv      3.703 ms  C=128x128 K=11 T=2048->2048 d=1 p=5 pack=8 path=VNNI+leaky
+  #107 Conv      3.593 ms  C=64x64 K=7 T=4096->4096 d=1 p=3 pack=8 path=FP32+leaky
+  #112 Conv      3.398 ms  C=64x64 K=7 T=4096->4096 d=5 p=15 pack=8 path=FP32+leaky
+  #070 Conv      3.396 ms  C=128x128 K=3 T=2048->2048 d=5 p=5 pack=8 path=FP32+leaky
+  #064 Conv      3.393 ms  C=128x128 K=3 T=2048->2048 d=1 p=1 pack=8 path=FP32
+  #067 Conv      3.272 ms  C=128x128 K=3 T=2048->2048 d=3 p=3 pack=8 path=FP32+leaky
+  #110 Conv      3.187 ms  C=64x64 K=7 T=4096->4096 d=1 p=3 pack=8 path=FP32+leaky
+  #106 Conv      3.167 ms  C=64x64 K=7 T=4096->4096 d=1 p=3 pack=8 path=FP32
+  #071 Conv      3.071 ms  C=128x128 K=3 T=2048->2048 d=1 p=1 pack=8 path=FP32+leaky
+  #089 Conv      2.925 ms  C=128x128 K=11 T=2048->2048 d=5 p=25 pack=8 path=VNNI+leaky
+  #109 Conv      2.916 ms  C=64x64 K=7 T=4096->4096 d=3 p=9 pack=8 path=FP32+leaky
+  #065 Conv      2.904 ms  C=128x128 K=3 T=2048->2048 d=1 p=1 pack=8 path=FP32+leaky
+  #027 ConvT     2.901 ms  C=512x256 K=16 T=32->256 stride=8 p=4
+  #084 Conv      2.805 ms  C=128x128 K=11 T=2048->2048 d=1 p=5 pack=8 path=VNNI+leaky
+  #083 Conv      2.782 ms  C=128x128 K=11 T=2048->2048 d=1 p=5 pack=8 path=VNNI
+  #041 Conv      2.665 ms  C=256x256 K=7 T=256->256 d=3 p=9 pack=8 path=FP32+leaky
+  #039 Conv      2.658 ms  C=256x256 K=7 T=256->256 d=1 p=3 pack=8 path=FP32+leaky
+  #090 Conv      2.643 ms  C=128x128 K=11 T=2048->2048 d=1 p=5 pack=8 path=VNNI+leaky
+  #038 Conv      2.566 ms  C=256x256 K=7 T=256->256 d=1 p=3 pack=8 path=FP32
+  #086 Conv      2.550 ms  C=128x128 K=11 T=2048->2048 d=3 p=15 pack=8 path=VNNI+leaky
+  #042 Conv      2.475 ms  C=256x256 K=7 T=256->256 d=1 p=3 pack=8 path=FP32+leaky
+  #045 Conv      2.452 ms  C=256x256 K=7 T=256->256 d=1 p=3 pack=8 path=FP32+leaky
+  #044 Conv      2.439 ms  C=256x256 K=7 T=256->256 d=5 p=15 pack=8 path=FP32+leaky
+  #116 Conv      2.374 ms  C=64x64 K=11 T=4096->4096 d=1 p=5 pack=8 path=VNNI
+  #119 Conv      2.333 ms  C=64x64 K=11 T=4096->4096 d=3 p=15 pack=8 path=VNNI+leaky
+  #074 Conv      2.248 ms  C=128x128 K=7 T=2048->2048 d=1 p=3 pack=8 path=VNNI+leaky
+  #117 Conv      2.230 ms  C=64x64 K=11 T=4096->4096 d=1 p=5 pack=8 path=VNNI+leaky
+  #076 Conv      2.138 ms  C=128x128 K=7 T=2048->2048 d=3 p=9 pack=8 path=VNNI+leaky
+  #123 Conv      2.090 ms  C=64x64 K=11 T=4096->4096 d=1 p=5 pack=8 path=VNNI+leaky
+  #122 Conv      2.072 ms  C=64x64 K=11 T=4096->4096 d=5 p=25 pack=8 path=VNNI+leaky
+  #120 Conv      2.064 ms  C=64x64 K=11 T=4096->4096 d=1 p=5 pack=8 path=VNNI+leaky
+  #073 Conv      2.027 ms  C=128x128 K=7 T=2048->2048 d=1 p=3 pack=8 path=VNNI
+  #153 Conv      1.997 ms  C=32x32 K=11 T=8192->8192 d=1 p=5 pack=8 path=FP32+leaky
+  #149 Conv      1.974 ms  C=32x32 K=11 T=8192->8192 d=1 p=5 pack=8 path=FP32
+  #150 Conv      1.960 ms  C=32x32 K=11 T=8192->8192 d=1 p=5 pack=8 path=FP32+leaky
+  #128 ConvT     1.954 ms  C=64x32 K=4 T=4096->8192 stride=2 p=1
+  #097 Conv      1.954 ms  C=64x64 K=3 T=4096->4096 d=1 p=1 pack=8 path=FP32
+  #152 Conv      1.951 ms  C=32x32 K=11 T=8192->8192 d=3 p=15 pack=8 path=FP32+leaky
+  #077 Conv      1.914 ms  C=128x128 K=7 T=2048->2048 d=1 p=3 pack=8 path=VNNI+leaky
+  #133 Conv      1.913 ms  C=32x32 K=3 T=8192->8192 d=3 p=3 pack=8 path=FP32+leaky
+  #080 Conv      1.907 ms  C=128x128 K=7 T=2048->2048 d=1 p=3 pack=8 path=VNNI+leaky
+  #104 Conv      1.904 ms  C=64x64 K=3 T=4096->4096 d=1 p=1 pack=8 path=FP32+leaky
+  #100 Conv      1.867 ms  C=64x64 K=3 T=4096->4096 d=3 p=3 pack=8 path=FP32+leaky
+  #156 Conv      1.846 ms  C=32x32 K=11 T=8192->8192 d=1 p=5 pack=8 path=FP32+leaky
+  #101 Conv      1.832 ms  C=64x64 K=3 T=4096->4096 d=1 p=1 pack=8 path=FP32+leaky
+  #079 Conv      1.824 ms  C=128x128 K=7 T=2048->2048 d=5 p=15 pack=8 path=VNNI+leaky
+  #155 Conv      1.785 ms  C=32x32 K=11 T=8192->8192 d=5 p=25 pack=8 path=FP32+leaky
+  #098 Conv      1.783 ms  C=64x64 K=3 T=4096->4096 d=1 p=1 pack=8 path=FP32+leaky
+  #103 Conv      1.779 ms  C=64x64 K=3 T=4096->4096 d=5 p=5 pack=8 path=FP32+leaky
+  #179 Conv      1.625 ms  C=16x16 K=7 T=16384->16384 d=1 p=3 pack=8 path=FP32+leaky
+  #146 Conv      1.393 ms  C=32x32 K=7 T=8192->8192 d=1 p=3 pack=8 path=FP32+leaky
+  #030 Conv      1.369 ms  C=256x256 K=3 T=256->256 d=1 p=1 pack=8 path=FP32+leaky
+  #145 Conv      1.305 ms  C=32x32 K=7 T=8192->8192 d=5 p=15 pack=8 path=FP32+leaky
+  #033 Conv      1.285 ms  C=256x256 K=3 T=256->256 d=1 p=1 pack=8 path=FP32+leaky
+  #032 Conv      1.252 ms  C=256x256 K=3 T=256->256 d=3 p=3 pack=8 path=FP32+leaky
+  #139 Conv      1.243 ms  C=32x32 K=7 T=8192->8192 d=1 p=3 pack=8 path=FP32
+  #140 Conv      1.225 ms  C=32x32 K=7 T=8192->8192 d=1 p=3 pack=8 path=FP32+leaky
+  #029 Conv      1.195 ms  C=256x256 K=3 T=256->256 d=1 p=1 pack=8 path=FP32
+  #142 Conv      1.123 ms  C=32x32 K=7 T=8192->8192 d=3 p=9 pack=8 path=FP32+leaky
+  #143 Conv      1.095 ms  C=32x32 K=7 T=8192->8192 d=1 p=3 pack=8 path=FP32+leaky
+  #161 ConvT     1.083 ms  C=32x16 K=4 T=8192->16384 stride=2 p=1
+  #036 Conv      1.073 ms  C=256x256 K=3 T=256->256 d=1 p=1 pack=8 path=FP32+leaky
+  #035 Conv      1.063 ms  C=256x256 K=3 T=256->256 d=5 p=5 pack=8 path=FP32+leaky
+  #131 Conv      1.028 ms  C=32x32 K=3 T=8192->8192 d=1 p=1 pack=8 path=FP32+leaky
+  #182 Conv      1.009 ms  C=16x16 K=11 T=16384->16384 d=1 p=5 pack=8 path=FP32
+  #130 Conv      0.992 ms  C=32x32 K=3 T=8192->8192 d=1 p=1 pack=8 path=FP32
+  #193 Conv      0.936 ms  C=16x1 K=7 T=16384->16384 d=1 p=3 pack=4 path=FP32+leaky
+  #188 Conv      0.875 ms  C=16x16 K=11 T=16384->16384 d=5 p=25 pack=8 path=FP32+leaky
+  #134 Conv      0.865 ms  C=32x32 K=3 T=8192->8192 d=1 p=1 pack=8 path=FP32+leaky
+  #166 Conv      0.864 ms  C=16x16 K=3 T=16384->16384 d=3 p=3 pack=8 path=FP32+leaky
+  #189 Conv      0.863 ms  C=16x16 K=11 T=16384->16384 d=1 p=5 pack=8 path=FP32+leaky
+  #186 Conv      0.858 ms  C=16x16 K=11 T=16384->16384 d=1 p=5 pack=8 path=FP32+leaky
+  #183 Conv      0.826 ms  C=16x16 K=11 T=16384->16384 d=1 p=5 pack=8 path=FP32+leaky
+  #185 Conv      0.800 ms  C=16x16 K=11 T=16384->16384 d=3 p=15 pack=8 path=FP32+leaky
+  #172 Conv      0.691 ms  C=16x16 K=7 T=16384->16384 d=1 p=3 pack=8 path=FP32
+  #136 Conv      0.671 ms  C=32x32 K=3 T=8192->8192 d=5 p=5 pack=8 path=FP32+leaky
+  #137 Conv      0.642 ms  C=32x32 K=3 T=8192->8192 d=1 p=1 pack=8 path=FP32+leaky
+  #173 Conv      0.605 ms  C=16x16 K=7 T=16384->16384 d=1 p=3 pack=8 path=FP32+leaky
+  #175 Conv      0.566 ms  C=16x16 K=7 T=16384->16384 d=3 p=9 pack=8 path=FP32+leaky
+  #167 Conv      0.559 ms  C=16x16 K=3 T=16384->16384 d=1 p=1 pack=8 path=FP32+leaky
+  #178 Conv      0.552 ms  C=16x16 K=7 T=16384->16384 d=5 p=15 pack=8 path=FP32+leaky
+  #163 Conv      0.520 ms  C=16x16 K=3 T=16384->16384 d=1 p=1 pack=8 path=FP32
+  #176 Conv      0.520 ms  C=16x16 K=7 T=16384->16384 d=1 p=3 pack=8 path=FP32+leaky
+  #169 Conv      0.474 ms  C=16x16 K=3 T=16384->16384 d=5 p=5 pack=8 path=FP32+leaky
+  #164 Conv      0.447 ms  C=16x16 K=3 T=16384->16384 d=1 p=1 pack=8 path=FP32+leaky
+  #170 Conv      0.440 ms  C=16x16 K=3 T=16384->16384 d=1 p=1 pack=8 path=FP32+leaky
+  #025 Conv      0.363 ms  C=128x512 K=7 T=32->32 d=1 p=3 pack=8 path=FP32
+  #061 Conv      0.296 ms  C=1x128 K=1 T=2048->2048 d=1 p=0 pack=8 path=FP32
+DSASM PURE-ASM vocoder: frames=32 samples=16384 workers=6 median=214.474 ms audio=371.519 ms RTF=0.577 speed=1.732x
+  parity max_abs=0.135429204 rmse=0.0169802096 cosine=0.999688334 SNR=32.05 dB tol=0.2
+DSASM parity: OK

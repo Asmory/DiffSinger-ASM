@@ -166,12 +166,14 @@ static int vnni_k7_op_allowed(const DSAsmVocoderGraph *g,const DSV35Op *op,size_
 static int vnni_extra_op_allowed(const DSAsmVocoderGraph *g,const DSV35Op *op){
     const char *configured=getenv("DSASM_VNNI_EXTRA_OPS");
     unsigned long wanted=(unsigned long)(op-g->ops);
-    /* The 32-frame stream gate promoted these six measured hot operators.
+    /* The 32-frame stream gates promoted these measured hot operators.
        Other fixed shapes remain separate quality/performance strata. */
     if(!configured){
         if(g->h->frames!=32u)return 0;
         return wanted==79u||wanted==77u||wanted==80u||
-               wanted==76u||wanted==74u||wanted==73u;
+               wanted==76u||wanted==74u||wanted==73u||
+               wanted==48u||wanted==49u||wanted==51u||
+               wanted==52u||wanted==54u||wanted==55u;
     }
     if(!*configured||!strcmp(configured,"off"))return 0;
     const char *p=configured;

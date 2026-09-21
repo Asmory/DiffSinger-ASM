@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Compare only the verified M55 long-audio baseline with the M58 candidate."""
+"""Compare a verified long-audio baseline with one fused candidate."""
 
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import shutil
@@ -16,7 +17,7 @@ PYTHON = Path(os.environ.get("PY", PROJECT / ".venv/bin/python"))
 BASE = PROJECT / "build/m53_long/f384"
 FIXTURE = BASE / "fixture"
 BASELINE_BUNDLE = BASE / "nsf.dsv35"
-OUT = PROJECT / "build/m58_e2e"
+OUT = Path(os.environ.get("E2E_OUT", PROJECT / "build/m58_e2e"))
 
 
 def run(command: list[object], env: dict[str, str] | None = None) -> None:
@@ -73,7 +74,9 @@ def require_inputs() -> None:
         raise SystemExit("missing M55 comparison prerequisites:\n  " + "\n  ".join(missing))
 
 
-def benchmark_env(label: str) -> dict[str, str]:
+def benchmark_env(label: str, baseline: str, candidate_cin: str) -> dict[str, str]:
+    promoted_baseline = label == "baseline" and baseline == "promoted"
+    use_candidate_quantizer = label == "candidate" or promoted_baseline
     env = os.environ.copy()
     env.update(
         DSASM_2D="1",
@@ -87,16 +90,16 @@ def benchmark_env(label: str) -> dict[str, str]:
         DSASM_K3_TMODE="24",
         DSASM_K7_T24="1",
         DSASM_K11_T24="1",
-        DSASM_VNNI="k11" if label == "baseline" else "k117",
-        DSASM_VNNI_ASYM="0" if label == "baseline" else "1",
-        DSASM_VNNI_CIN="128",
+        DSASM_VNNI="k117" if use_candidate_quantizer else "k11",
+        DSASM_VNNI_ASYM="1" if use_candidate_quantizer else "0",
+        DSASM_VNNI_CIN="128" if label == "baseline" else candidate_cin,
         DSASM_GOLDEN_COS="0.999",
         DSASM_GOLDEN_SNR="25",
     )
     return env
 
 
-def measure(label: str, bundle: Path, index: int, cpus: str) -> list[float]:
+def measure(label: str, bundle: Path, index: int, cpus: str, baseline: str, candidate_cin: str) -> list[float]:
     work = OUT / f"{index:02d}_{label}"
     if work.exists():
         shutil.rmtree(work)
@@ -115,7 +118,8 @@ def measure(label: str, bundle: Path, index: int, cpus: str) -> list[float]:
         "--depth", "0.6",
     ]
     print("+ " + " ".join(map(str, command)), flush=True)
-    process = subprocess.run(list(map(str, command)), cwd=PROJECT, env=benchmark_env(label), text=True,
+    process = subprocess.run(list(map(str, command)), cwd=PROJECT,
+                             env=benchmark_env(label, baseline, candidate_cin), text=True,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=True)
     print(process.stdout, end="")
     (work / "run.log").write_text(process.stdout)
@@ -126,6 +130,10 @@ def measure(label: str, bundle: Path, index: int, cpus: str) -> list[float]:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--baseline", choices=("m55", "promoted"), default="m55")
+    parser.add_argument("--candidate-cin", default="128")
+    args = parser.parse_args()
     run(["make", "-j" + str(os.cpu_count() or 1), "build/persistent-e2e", "build/dsasm-vocoder-m40"])
     require_inputs()
     OUT.mkdir(parents=True, exist_ok=True)
@@ -147,9 +155,11 @@ def main() -> None:
     cpus = p_core_smt()
     samples: list[tuple[str, float]] = []
     sequence = ["baseline", "candidate", "candidate", "baseline"]
-    bundles = {"baseline": BASELINE_BUNDLE, "candidate": candidate}
+    baseline_bundle = BASELINE_BUNDLE if args.baseline == "m55" else candidate
+    bundles = {"baseline": baseline_bundle, "candidate": candidate}
     for index, label in enumerate(sequence, 1):
-        samples.extend((label, value) for value in measure(label, bundles[label], index, cpus))
+        values = measure(label, bundles[label], index, cpus, args.baseline, args.candidate_cin)
+        samples.extend((label, value) for value in values)
 
     sample_file = OUT / "samples.tsv"
     sample_file.write_text("".join(f"e2e\t{label}\t{value:.6f}\n" for label, value in samples))

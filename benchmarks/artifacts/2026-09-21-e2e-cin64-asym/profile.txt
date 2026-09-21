@@ -1,0 +1,16 @@
+Target: Intel Core i5-13420H, CPUs 0-7, 8 workers
+Graph: identical all3711 bundle on both sides
+Baseline: asymmetric K7/K11 VNNI, DSASM_VNNI_CIN=128
+Candidate: asymmetric K7/K11 VNNI, DSASM_VNNI_CIN=128,64
+
+Vocoder-only ABBA medians:
+baseline: 3067.900 ms, 3065.676 ms
+candidate: 2666.375 ms, 2535.727 ms
+
+Candidate quality:
+max_abs=0.383658946 rmse=0.031872802 cosine=0.999016494 SNR=27.06 dB
+
+Complete E2E gate:
+median improvement=9.49%
+baseline median/p90/worst/CV=4370.319/4759.711/4799.979/0.061
+candidate median/p90/worst/CV=3991.507/4120.739/4136.881/0.037

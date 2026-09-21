@@ -161,6 +161,36 @@ baseline only after changing it helps the E2E gate pass.
 Tracked raw samples and profiler evidence are under
 `benchmarks/artifacts/2026-09-21-e2e-k117-asym/`.
 
+## 2026-09-21 Cin64 VNNI promotion
+
+The next iteration compared only the promoted Cin128 baseline with a candidate
+that additionally enabled asymmetric K7/K11 VNNI at Cin64. Both sides used the
+same `all3711` graph and all other runtime settings were identical:
+
+```bash
+E2E_OUT=build/cin64_e2e python scripts/run_m58_vs_m55_e2e.py \
+  --baseline promoted --candidate-cin 128,64
+```
+
+The candidate first passed a vocoder-only ABBA screen: its two medians were
+`2666.375` and `2535.727 ms`, versus `3067.900` and `3065.676 ms` for the
+Cin128 baseline. Waveform quality remained above the hard gate at cosine
+`0.999016494` and SNR `27.06 dB`.
+
+Final ten-sample-per-side E2E result:
+
+| Metric | Cin128 baseline | Cin128/Cin64 candidate | Result |
+| --- | ---: | ---: | --- |
+| Median total | 4370.319 ms | 3991.507 ms | 9.49% faster |
+| Median RTF | 0.980 | 0.895 | improved |
+| p90 total | 4759.711 ms | 4120.739 ms | improved |
+| Worst total | 4799.979 ms | 4136.881 ms | improved |
+| CV | 0.061 | 0.037 | improved |
+
+All ten candidate requests had `RTF < 1`. Cin64 asymmetric VNNI is therefore
+the new E2E baseline and a new subsystem baseline. Raw evidence is tracked in
+`benchmarks/artifacts/2026-09-21-e2e-cin64-asym/`.
+
 ## Reproduction checks
 
 ```bash

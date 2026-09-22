@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 
 import json
+import errno
 import io
 import os
+import signal
 import struct
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -185,12 +188,129 @@ class ModelToolTests(unittest.TestCase):
                 {"role": "acoustic.onnx", "path": "acoustic.onnx", "size": 1, "sha256": tool.sha256_file(acoustic)},
                 {"role": "vocoder.onnx", "path": "dsvocoder/nsf_hifigan.onnx", "size": 1, "sha256": tool.sha256_file(vocoder)},
             ]
-            with mock.patch.object(tool, "source_entries", return_value=entries):
-                payload = tool.plan_payload(root, acoustic, vocoder)
+            payload = tool.plan_payload(entries)
             self.assertEqual(payload["artifacts"], [
                 {"role": role, "path": path} for role, path in tool.REQUIRED_ARTIFACTS
             ])
             self.assertTrue(all(payload["space"][key] > 0 for key in ("staging_bytes", "final_bytes", "work_peak_bytes")))
+
+    def test_manifest_requires_provider_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = write_fixture_bundle(root)
+            manifest.pop("provider_build")
+            (root / "bundle.json").write_text(json.dumps(manifest), encoding="ascii")
+            with self.assertRaises(tool.ProtocolError) as raised:
+                tool.validate_manifest(root)
+            self.assertEqual(raised.exception.code, "bundle.invalid.manifest")
+
+    def test_manifest_root_must_be_an_object(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "bundle.json").write_text("[]", encoding="ascii")
+            with self.assertRaises(tool.ProtocolError) as raised:
+                tool.validate_manifest(root)
+            self.assertEqual(raised.exception.code, "bundle.invalid.manifest")
+
+    def test_manifest_is_not_published_before_offline_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = write_fixture_bundle(root)
+            (root / "bundle.json").unlink()
+            manifest["provider_build"] = ""
+            with self.assertRaises(tool.ProtocolError) as raised:
+                tool.write_validated_manifest(root, manifest)
+            self.assertEqual(raised.exception.code, "bundle.invalid.manifest")
+            self.assertFalse((root / "bundle.json").exists())
+            self.assertFalse((root / ".bundle.json.new").exists())
+
+    def test_interrupted_child_process_group_is_reaped(self):
+        process = mock.Mock()
+        process.pid = 4242
+        process.poll.return_value = None
+        process.communicate.side_effect = [
+            KeyboardInterrupt(),
+            subprocess.TimeoutExpired("packer", 2.0),
+            ("", None),
+        ]
+        with mock.patch.object(tool.subprocess, "Popen", return_value=process) as popen, \
+                mock.patch.object(tool.os, "killpg") as killpg:
+            with self.assertRaises(KeyboardInterrupt):
+                tool.run_child(["packer"])
+        self.assertEqual(
+            killpg.call_args_list,
+            [mock.call(4242, signal.SIGINT), mock.call(4242, signal.SIGKILL)],
+        )
+        self.assertTrue(popen.call_args.kwargs["start_new_session"])
+        self.assertEqual(process.communicate.call_count, 3)
+
+    def test_io_reason_and_exit_mapping(self):
+        cases = (
+            (errno.EACCES, "io.denied", 6),
+            (errno.EROFS, "io.denied", 6),
+            (errno.ENOSPC, "space.insufficient", 6),
+            (errno.EIO, "io.failed", 6),
+        )
+        for number, reason, exit_code in cases:
+            with self.subTest(reason=reason):
+                error = tool.io_protocol_error(OSError(number, os.strerror(number)))
+                self.assertEqual(error.code, reason)
+                self.assertEqual(tool.exit_for(tool.status_for(error.code), error.code), exit_code)
+
+    def test_conversion_paths_must_be_separate_directories(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            staging = root / "staging"
+            work = root / "work"
+            tool.validate_conversion_paths(staging, work)
+            invalid_pairs = (
+                (staging, staging),
+                (staging, staging / "work"),
+                (work / "staging", work),
+            )
+            for output, scratch in invalid_pairs:
+                with self.subTest(output=output, work=scratch), self.assertRaises(tool.ProtocolError) as raised:
+                    tool.validate_conversion_paths(output, scratch)
+                self.assertEqual(raised.exception.code, "request.invalid")
+            staging.write_text("not a directory", encoding="ascii")
+            with self.assertRaises(tool.ProtocolError) as raised:
+                tool.validate_conversion_paths(staging, work)
+            self.assertEqual(raised.exception.code, "request.invalid")
+
+    def test_bundle_root_symlink_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "target"
+            target.mkdir()
+            link = root / "bundle"
+            link.symlink_to(target, target_is_directory=True)
+            args = mock.Mock(protocol=1, bundle=link)
+            with self.assertRaises(tool.ProtocolError) as raised:
+                tool.command_validate(args)
+            self.assertEqual(raised.exception.code, "bundle.invalid.path")
+
+    def test_malformed_graph_uses_role_specific_reason(self):
+        import onnx
+        from onnx import helper
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "dsconfig.yaml").write_text("{}\n", encoding="ascii")
+            acoustic = root / "acoustic.onnx"
+            vocoder = root / "vocoder.onnx"
+            acoustic.write_bytes(b"not an ONNX graph")
+            vocoder.write_bytes(helper.make_model(helper.make_graph([], "empty", [], [])).SerializeToString())
+            with mock.patch.dict(sys.modules, {"onnxruntime": mock.Mock()}), \
+                    self.assertRaises(tool.ProtocolError) as raised:
+                tool.source_entries(root, acoustic, vocoder, {})
+            self.assertEqual(raised.exception.code, "source.unsupported.acoustic_graph")
+
+            acoustic.write_bytes(vocoder.read_bytes())
+            vocoder.write_bytes(b"not an ONNX graph")
+            with mock.patch.dict(sys.modules, {"onnxruntime": mock.Mock()}), \
+                    self.assertRaises(tool.ProtocolError) as raised:
+                tool.source_entries(root, acoustic, vocoder, {})
+            self.assertEqual(raised.exception.code, "source.unsupported.vocoder_graph")
 
     def test_envelope_is_versioned(self):
         value = tool.envelope("validate", "ok", "ok")

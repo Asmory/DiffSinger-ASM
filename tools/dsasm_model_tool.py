@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
 import re
+import signal
 import struct
 import subprocess
 import sys
@@ -51,6 +53,16 @@ class ProtocolError(Exception):
         super().__init__(detail)
         self.code = code
         self.detail = detail
+
+
+def io_protocol_error(exc: OSError) -> ProtocolError:
+    if exc.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
+        code = "io.denied"
+    elif exc.errno in (errno.ENOSPC, errno.EDQUOT):
+        code = "space.insufficient"
+    else:
+        code = "io.failed"
+    return ProtocolError(code, f"{type(exc).__name__}: {exc}")
 
 
 def sha256_file(path: Path) -> str:
@@ -143,7 +155,9 @@ def load_singer_config(singer_root: Path) -> dict[str, Any]:
         raise ProtocolError("toolchain.missing_dependency", exc.name or "yaml") from exc
     try:
         value = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+    except OSError as exc:
+        raise io_protocol_error(exc) from exc
+    except (UnicodeError, yaml.YAMLError) as exc:
         raise ProtocolError("source.invalid_config", str(exc)) from exc
     if not isinstance(value, dict):
         raise ProtocolError("source.invalid_config", "dsconfig.yaml root must be a mapping")
@@ -255,8 +269,17 @@ def source_entries(singer_root: Path, acoustic: Path, vocoder: Path, config: dic
     for path in sorted(singer_root.glob("*.emb")):
         resolved = contained_source(singer_root, path.name, "speaker embedding")
         candidates.append((f"speaker.embedding/{path.name}", resolved))
-    candidates.extend(onnx_external_sources(singer_root, acoustic, "acoustic"))
-    candidates.extend(onnx_external_sources(singer_root, vocoder, "vocoder"))
+    for path, prefix, reason in (
+            (acoustic, "acoustic", "source.unsupported.acoustic_graph"),
+            (vocoder, "vocoder", "source.unsupported.vocoder_graph")):
+        try:
+            candidates.extend(onnx_external_sources(singer_root, path, prefix))
+        except ProtocolError:
+            raise
+        except OSError as exc:
+            raise io_protocol_error(exc) from exc
+        except Exception as exc:
+            raise ProtocolError(reason, f"{type(exc).__name__}: {exc}") from exc
     entries = []
     seen: set[str] = set()
     for role, path in candidates:
@@ -333,9 +356,19 @@ def inspect_source(singer_root: Path, config: dict[str, Any], acoustic: Path, vo
         raise ProtocolError("source.unsupported.energy_embedding", "use_energy_embed is true")
     try:
         import onnx  # type: ignore
+        import pack_acoustic_onnx_m25 as acoustic_packer  # type: ignore
+    except ModuleNotFoundError as exc:
+        raise ProtocolError("toolchain.missing_dependency", exc.name or "onnx") from exc
+    try:
         acoustic_model = onnx.load(str(acoustic), load_external_data=False)
-        vocoder_model = onnx.load(str(vocoder), load_external_data=False)
         onnx.checker.check_model(acoustic_model, full_check=False)
+        acoustic_packer.preflight_onnx(acoustic)
+    except OSError as exc:
+        raise io_protocol_error(exc) from exc
+    except Exception as exc:
+        raise ProtocolError("source.unsupported.acoustic_graph", f"{type(exc).__name__}: {exc}") from exc
+    try:
+        vocoder_model = onnx.load(str(vocoder), load_external_data=False)
         onnx.checker.check_model(vocoder_model, full_check=False)
         unsupported = sorted({node.op_type for node in vocoder_model.graph.node if node.op_type not in VOCODER_OPS})
         inputs = {item.name for item in vocoder_model.graph.input}
@@ -343,23 +376,19 @@ def inspect_source(singer_root: Path, config: dict[str, Any], acoustic: Path, vo
             raise ProtocolError("source.unsupported.vocoder_graph", ",".join(unsupported))
         if not {"mel", "f0"}.issubset(inputs):
             raise ProtocolError("source.unsupported.vocoder_graph", f"inputs={sorted(inputs)}")
-        import pack_acoustic_onnx_m25 as acoustic_packer  # type: ignore
-        acoustic_packer.preflight_onnx(acoustic)
         packer = Path(__file__).resolve().parent / "pack_vocoder_graph_m35.py"
         for frames in (32, 384):
-            result = subprocess.run(
+            returncode, output = run_child(
                 [sys.executable, str(packer), str(vocoder), "--frames", str(frames), "--preflight",
-                 "--vnni-scope", "all-k711", "--residual-scope", "all3711"],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            )
-            if result.returncode:
-                raise ProtocolError("source.unsupported.vocoder_graph", result.stdout.strip()[-8000:])
-    except ModuleNotFoundError as exc:
-        raise ProtocolError("toolchain.missing_dependency", exc.name or "onnx") from exc
+                 "--vnni-scope", "all-k711", "--residual-scope", "all3711"])
+            if returncode:
+                raise ProtocolError("source.unsupported.vocoder_graph", output.strip()[-8000:])
     except ProtocolError:
         raise
+    except OSError as exc:
+        raise io_protocol_error(exc) from exc
     except Exception as exc:
-        raise ProtocolError("source.unsupported.acoustic_graph", f"{type(exc).__name__}: {exc}") from exc
+        raise ProtocolError("source.unsupported.vocoder_graph", f"{type(exc).__name__}: {exc}") from exc
     return dimensions, entries
 
 
@@ -655,22 +684,26 @@ def build_manifest(bundle: Path, sources: list[dict[str, Any]], audio: dict[str,
     return manifest
 
 
-def validate_manifest(bundle: Path) -> tuple[dict[str, Any], dict[str, Any]]:
-    path = bundle / "bundle.json"
-    if not path.is_file():
-        raise ProtocolError("bundle.missing", "bundle.json")
-    try:
-        manifest = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ProtocolError("bundle.invalid.manifest", str(exc)) from exc
+def validate_manifest_data(bundle: Path, manifest: Any) -> dict[str, Any]:
+    if not isinstance(manifest, dict):
+        raise ProtocolError("bundle.invalid.manifest", "bundle.json root must be an object")
     if manifest.get("schema") != MANIFEST_SCHEMA or manifest.get("schema_version") != MANIFEST_VERSION:
         raise ProtocolError("bundle.invalid.manifest", repr((manifest.get("schema"), manifest.get("schema_version"))))
+    if not isinstance(manifest.get("provider_build"), str) or not manifest["provider_build"]:
+        raise ProtocolError("bundle.invalid.manifest", "provider_build must be a nonempty string")
+    for field in ("source_fingerprint", "bundle_fingerprint"):
+        if not isinstance(manifest.get(field), str) or not re.fullmatch(r"[0-9a-f]{64}", manifest[field]):
+            raise ProtocolError("bundle.invalid.manifest", f"{field} must be 64 lowercase hexadecimal digits")
+    if (manifest.get("formats") != FORMATS or manifest.get("isa_profile") != ISA_PROFILE or
+            manifest.get("product_buckets") != [32, 384] or manifest.get("packers") != PACKERS or
+            manifest.get("converter_revision") != CONVERTER_REVISION):
+        raise ProtocolError("bundle.invalid.manifest", "converter, packers, formats, ISA profile, or product buckets")
     try:
         for child in bundle.rglob("*"):
             if child.is_symlink() or (not child.is_dir() and not child.is_file()):
                 raise ProtocolError("bundle.invalid.path", child.relative_to(bundle).as_posix())
     except OSError as exc:
-        raise ProtocolError("io.failed", str(exc)) from exc
+        raise io_protocol_error(exc) from exc
     listed = manifest.get("artifacts")
     if not isinstance(listed, list):
         raise ProtocolError("bundle.invalid.manifest", "artifacts must be an array")
@@ -698,8 +731,11 @@ def validate_manifest(bundle: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         item = by_role[role]
         if path.is_symlink() or not path.is_file():
             raise ProtocolError("bundle.incomplete", relative)
-        if path.stat().st_size != item.get("size") or sha256_file(path) != item.get("sha256"):
-            raise ProtocolError("bundle.invalid.digest", relative)
+        try:
+            if path.stat().st_size != item.get("size") or sha256_file(path) != item.get("sha256"):
+                raise ProtocolError("bundle.invalid.digest", relative)
+        except OSError as exc:
+            raise io_protocol_error(exc) from exc
     sources = validate_source_records(manifest.get("source_artifacts"))
     if manifest.get("source_fingerprint") != source_fingerprint(sources):
         raise ProtocolError("bundle.invalid.digest", "source fingerprint")
@@ -711,11 +747,28 @@ def validate_manifest(bundle: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     expected_audio = {key: audio[key] for key in ("sample_rate", "hop_size", "mel_bins")}
     if declared_audio != expected_audio:
         raise ProtocolError("bundle.invalid.dimensions", repr(declared_audio))
-    if (manifest.get("formats") != FORMATS or manifest.get("isa_profile") != ISA_PROFILE or
-            manifest.get("product_buckets") != [32, 384] or manifest.get("packers") != PACKERS or
-            manifest.get("converter_revision") != CONVERTER_REVISION):
-        raise ProtocolError("bundle.invalid.manifest", "converter, packers, formats, ISA profile, or product buckets")
-    return manifest, audio
+    return audio
+
+
+def validate_manifest(bundle: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    path = bundle / "bundle.json"
+    if not path.is_file():
+        raise ProtocolError("bundle.missing", "bundle.json")
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise io_protocol_error(exc) from exc
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ProtocolError("bundle.invalid.manifest", str(exc)) from exc
+    return manifest, validate_manifest_data(bundle, manifest)
+
+
+def write_validated_manifest(bundle: Path, manifest: dict[str, Any]) -> None:
+    validate_manifest_data(bundle, manifest)
+    serialized = json.dumps(manifest, indent=2, ensure_ascii=True, sort_keys=True) + "\n"
+    temporary = bundle / ".bundle.json.new"
+    temporary.write_text(serialized, encoding="ascii")
+    temporary.replace(bundle / "bundle.json")
 
 
 def bundle_report(bundle: Path | None) -> dict[str, Any]:
@@ -731,8 +784,7 @@ def bundle_report(bundle: Path | None) -> dict[str, Any]:
         return {"bundle_state": "invalid", "bundle_fingerprint": None, "bundle_reason_code": exc.code, "bundle_diagnostic": exc.detail}
 
 
-def plan_payload(singer_root: Path, acoustic: Path, vocoder: Path) -> dict[str, Any]:
-    entries = source_entries(singer_root, acoustic, vocoder)
+def plan_payload(entries: list[dict[str, Any]]) -> dict[str, Any]:
     source_bytes = sum(item["size"] for item in entries)
     basis = max(source_bytes, 1024 * 1024)
     return {
@@ -756,13 +808,61 @@ def progress(operation: str, stage: str, state: str, completed: int, total: int)
     return envelope(operation, "ok", "ok", event="progress", stage=stage, progress=completed / total)
 
 
+def stop_child_process_group(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGINT)
+    except ProcessLookupError:
+        return
+    try:
+        process.communicate(timeout=2.0)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.communicate()
+
+
+def run_child(command: list[str]) -> tuple[int, str]:
+    try:
+        process = subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, start_new_session=True,
+        )
+    except OSError as exc:
+        raise io_protocol_error(exc) from exc
+    try:
+        output, _ = process.communicate()
+    except KeyboardInterrupt:
+        stop_child_process_group(process)
+        raise
+    return process.returncode, output
+
+
+def packer_failure_reason(stage: str, returncode: int, detail: str) -> str:
+    if returncode in (-signal.SIGINT, 128 + signal.SIGINT):
+        return "cancelled"
+    lowered = detail.lower()
+    if "no space left on device" in lowered or "disk quota exceeded" in lowered:
+        return "space.insufficient"
+    if "permission denied" in lowered or "read-only file system" in lowered:
+        return "io.denied"
+    if "input/output error" in lowered:
+        return "io.failed"
+    return "source.unsupported.acoustic_graph" if stage == "acoustic.pack" else "source.unsupported.vocoder_graph"
+
+
 def run_packer(command: list[str], stage: str, json_lines: bool, completed: int, total: int) -> None:
     if json_lines:
         emit(progress("convert", stage, "started", completed, total))
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    if result.returncode:
-        detail = result.stdout.strip()[-8000:]
-        reason_code = "source.unsupported.acoustic_graph" if stage == "acoustic.pack" else "source.unsupported.vocoder_graph"
+    returncode, output = run_child(command)
+    if returncode:
+        detail = output.strip()[-8000:]
+        reason_code = packer_failure_reason(stage, returncode, detail)
+        if reason_code == "cancelled":
+            raise KeyboardInterrupt
         raise ProtocolError(reason_code, detail)
     if json_lines:
         emit(progress("convert", stage, "completed", completed + 1, total))
@@ -829,8 +929,20 @@ def command_plan(args: argparse.Namespace) -> dict[str, Any]:
     return envelope(
         "plan", "ok", "ok", source_fingerprint=source_fingerprint(entries),
         source_artifacts=entries, model_state="compatible", source=dimensions,
-        **plan_payload(singer_root, acoustic, vocoder),
+        **plan_payload(entries),
     )
+
+
+def validate_conversion_paths(output: Path, work: Path) -> None:
+    if output == work or output in work.parents or work in output.parents:
+        raise ProtocolError("request.invalid", "staging and work paths must not overlap")
+    if output.exists():
+        if not output.is_dir():
+            raise ProtocolError("request.invalid", f"staging is not a directory: {output}")
+        if any(output.iterdir()):
+            raise ProtocolError("request.invalid", f"staging is not empty: {output}")
+    if work.exists() and not work.is_dir():
+        raise ProtocolError("request.invalid", f"work is not a directory: {work}")
 
 
 def command_convert(args: argparse.Namespace) -> dict[str, Any]:
@@ -845,8 +957,7 @@ def command_convert(args: argparse.Namespace) -> dict[str, Any]:
     if initial_fingerprint != args.expected_source_fingerprint:
         raise ProtocolError("source.changed", f"expected {args.expected_source_fingerprint}, got {initial_fingerprint}")
     output, work = args.staging.resolve(), args.work.resolve()
-    if output.exists() and any(output.iterdir()):
-        raise ProtocolError("request.invalid", f"staging is not empty: {output}")
+    validate_conversion_paths(output, work)
     acoustic_out, vocoder_out = output / "acoustic", output / "vocoder"
     acoustic_out.mkdir(parents=True, exist_ok=True)
     vocoder_out.mkdir(parents=True, exist_ok=True)
@@ -882,11 +993,7 @@ def command_convert(args: argparse.Namespace) -> dict[str, Any]:
             emit(envelope("convert", "ok", "ok", event="artifact", **item))
         emit(progress("convert", "manifest.write", "started", 4, total))
     manifest = build_manifest(output, final_entries, audio)
-    manifest_path = output / "bundle.json"
-    temporary = output / ".bundle.json.new"
-    temporary.write_text(json.dumps(manifest, indent=2, ensure_ascii=True, sort_keys=True) + "\n", encoding="ascii")
-    temporary.replace(manifest_path)
-    validate_manifest(output)
+    write_validated_manifest(output, manifest)
     if args.jsonl:
         emit(progress("convert", "manifest.write", "completed", 5, total))
     return envelope(
@@ -898,7 +1005,10 @@ def command_convert(args: argparse.Namespace) -> dict[str, Any]:
 
 def command_validate(args: argparse.Namespace) -> dict[str, Any]:
     require_protocol(args)
-    bundle = args.bundle.resolve()
+    bundle_argument = args.bundle.absolute()
+    if bundle_argument.is_symlink():
+        raise ProtocolError("bundle.invalid.path", "bundle root must not be a symlink")
+    bundle = bundle_argument.resolve()
     manifest, audio = validate_manifest(bundle)
     return envelope(
         "validate", "ok", "ok", bundle=str(bundle), bundle_state="ready",
@@ -941,6 +1051,18 @@ def make_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def remove_staging_manifest(operation: str, raw: list[str]) -> None:
+    if operation != "convert" or "--staging" not in raw:
+        return
+    index = raw.index("--staging") + 1
+    if index >= len(raw):
+        return
+    try:
+        (Path(raw[index]).resolve() / "bundle.json").unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
     operation = raw[0] if raw and raw[0] in ("inspect", "plan", "convert", "validate") else "unknown"
@@ -954,10 +1076,7 @@ def main(argv: list[str] | None = None) -> int:
             "validate": command_validate,
         }[args.operation](args)
     except ProtocolError as exc:
-        if operation == "convert" and "--staging" in raw:
-            index = raw.index("--staging") + 1
-            if index < len(raw):
-                (Path(raw[index]).resolve() / "bundle.json").unlink(missing_ok=True)
+        remove_staging_manifest(operation, raw)
         status = status_for(exc.code)
         payload: dict[str, Any] = {}
         if operation == "inspect":
@@ -968,16 +1087,14 @@ def main(argv: list[str] | None = None) -> int:
             }
         result = envelope(operation, status, exc.code, exc.detail, **payload)
     except KeyboardInterrupt:
-        if operation == "convert":
-            staging_index = raw.index("--staging") + 1 if "--staging" in raw and raw.index("--staging") + 1 < len(raw) else -1
-            if staging_index > 0:
-                (Path(raw[staging_index]).resolve() / "bundle.json").unlink(missing_ok=True)
+        remove_staging_manifest(operation, raw)
         result = envelope(operation, "cancelled", "cancelled")
+    except OSError as exc:
+        remove_staging_manifest(operation, raw)
+        protocol_error = io_protocol_error(exc)
+        result = envelope(operation, "error", protocol_error.code, protocol_error.detail)
     except Exception as exc:
-        if operation == "convert" and "--staging" in raw:
-            index = raw.index("--staging") + 1
-            if index < len(raw):
-                (Path(raw[index]).resolve() / "bundle.json").unlink(missing_ok=True)
+        remove_staging_manifest(operation, raw)
         result = envelope(operation, "error", "internal.error", f"{type(exc).__name__}: {exc}")
     emit(result)
     return exit_for(result["status"], result["reason_code"])

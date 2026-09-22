@@ -1,17 +1,30 @@
-# DSASM engine ABI v2
+# DSASM engine ABI v3
 
-`build/libdsasm.so` is the product-facing library. Its exported surface is
-limited to `dsasm_engine_*`; model, graph, and thread-pool structs remain
-implementation details.
+The provider/consumer obligations shared with OpenUtau are specified in the
+[supply contract draft](OPENUTAU_SUPPLY_CONTRACT_DRAFT.md).
 
-## Build and package
+`build/libdsasm.so` is the product-facing library. ABI v3 exposes two explicit
+execution modes backed by independently promoted performance profiles:
+
+| Mode | Workers | Measured region | Bucket | Overlap | Profile | Output compatibility |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `DSASM_MODE_REALTIME_STREAMING` | 4 | 32 | 32 | 8 | 2 | 0 (session only) |
+| `DSASM_MODE_BLOCK_BATCH` | 8 | 384 | 384 | 0 | 2 | 1 (canonical) |
+
+The values are returned by `dsasm_engine_mode_config()`. Integrations must use
+the returned values instead of duplicating them. `profile_revision` identifies
+the promoted execution profile. An `output_compatibility_revision` of zero
+forbids canonical PCM cache commit; equal nonzero revisions declare that the
+complete outputs may share a product cache entry. The two modes remain separate
+performance strata.
+
+## Build and model layout
 
 ```sh
 make engine-check
 ```
 
-Package the library beside the OpenUtau native runtime. Prepare models before
-playback. The acoustic directory contains:
+The acoustic directory contains:
 
 ```text
 fs2_acoustic.dsfs
@@ -20,56 +33,90 @@ lynxnet2.dsn
 model.conf
 ```
 
-The vocoder directory contains numeric fixed-shape buckets. Each bucket must
-have the acoustic model's mel-bin count and `model.conf` hop size:
+The vocoder directory must contain both product buckets:
 
 ```text
-64.dsv35
-128.dsv35
-256.dsv35
+32.dsv35
 384.dsv35
 ```
 
-Call `dsasm_engine_is_supported()` for the `Auto` backend check; ABI v2 requires
-Linux x86-64 with AVX2 and FMA. `dsasm_engine_create()` mmaps every model once,
-creates one persistent thread pool shared by acoustic inference and every
-vocoder bucket, and retains grow-on-demand inference buffers between calls. One engine
-serializes its render calls, so OpenUtau should keep one engine per active
-singer and schedule phrases through a singer-level queue.
+Each bucket must match the acoustic model's mel-bin count and the
+`model.conf` hop size. A mode engine fails creation if its required bucket is
+missing or the process CPU affinity cannot provide its exact worker count.
 
-## Rendering contract
+## Creating mode engines
 
-Initialize `dsasm_request` with `DSASM_REQUEST_INIT`, then fill pointers and
-dimensions. Set override flags for depth, steps, time scale, or spec range;
-otherwise `model.conf` values are used. `mel2ph` is 1-based. Passing durations
-instead lets the engine construct it. A single speaker embedding row is
-broadcast without requiring C# to duplicate it.
+Call `dsasm_engine_is_supported()` first, initialize the versioned config, and
+query the selected profile:
 
-`vocoder_bucket_frames` selects one exact fixed-shape bucket for the complete
-request. Zero selects the smallest loaded bucket. A nonzero unavailable size
-returns `DSASM_E_UNSUPPORTED`; the engine never silently expands a streaming
-request to a larger bucket. Eight frames overlap by default (set
-`overlap_frames` to a nonzero custom value). The engine withholds each block's
-overlap tail, blends it with the next block, and only then publishes immutable
-mono float32 PCM. Callback offsets are contiguous output sample offsets and the
-last callback has `is_final=1`.
+```c
+dsasm_mode_config config = {
+    .struct_size = sizeof(config),
+    .abi_version = DSASM_ENGINE_ABI_VERSION,
+};
+if (dsasm_engine_mode_config(DSASM_MODE_REALTIME_STREAMING, &config) != DSASM_OK)
+    /* reject the backend */;
 
-Cancellation is lock-free. `dsasm_engine_cancel()` invalidates the active
-request; the render call observes it before and after acoustic inference and
-between vocoder buckets. Destroy an engine only after its render call returns.
+dsasm_engine *engine = dsasm_engine_create_mode(
+    acoustic_dir, vocoder_dir, DSASM_MODE_REALTIME_STREAMING);
+```
 
-## C# loading
+`dsasm_engine_create_mode()` creates the profile's fixed worker pool and keeps
+the models and inference buffers resident. Product integrations should keep one
+engine per singer and mode. The older `dsasm_engine_create(..., workers)` entry
+point remains available for controlled benchmark experiments; it does not
+claim either promoted mode.
 
-Use `NativeLibrary.Load()` with an absolute path, resolve
-`dsasm_engine_abi_version` first, and require version 2 before resolving the
-remaining delegates. Keep delegates and the PCM callback rooted for the whole
-native call. The callback buffer is borrowed and must be copied into an owned
-array before returning.
+One engine serializes render calls. Cancellation is lock-free:
+`dsasm_engine_cancel()` invalidates the active request, and destruction is only
+valid after the render call returns. Profile revision 2 checks cancellation
+after FS2, after the aux decoder, after Rectified Flow conditioner projection,
+before and after each Euler step, and between vocoder buckets. It does not
+interrupt an assembly kernel that is already running.
 
-Publish each owned array to the mixer immediately. Since the native callback
-is synchronous, do not call `Render` again or destroy the engine from inside
-it. Return nonzero from the callback to abort; call `dsasm_engine_cancel()`
-from the cancellation-token thread for normal cancellation.
+## Request contract
 
-Cache keys for prepared bundles should include the source model hash, packer
-version, format version, and ISA profile. Singer names are not sufficient.
+Initialize requests with `dsasm_request_init_mode(mode)`. The resulting
+`mode`, `vocoder_bucket_frames`, and `overlap_frames` fields exactly match the
+queried profile. A mode engine rejects a request when any of those fields
+differs, so it cannot silently switch architecture or grow to another bucket.
+
+`region_frames` records the request size used by the accepted performance
+gate. Longer requests are valid and are divided into fixed vocoder buckets,
+but they do not inherit the champion's latency or throughput claim. A caller
+that needs the measured real-time cadence should submit successive 32-frame
+requests to one resident real-time engine. Batch scheduling should submit
+384-frame regions to one resident batch engine. The final short region may be
+padded by the integration and trimmed after PCM publication.
+
+Request pointers need to remain valid only for the synchronous call. `mel2ph`
+is 1-based. Passing `durations` instead lets the engine construct it. A single
+speaker embedding row is broadcast to every acoustic frame.
+
+PCM callbacks borrow mono float32 memory that is valid only during the call.
+Offsets are contiguous within one request. The caller must copy a callback's
+samples before returning. Returning nonzero aborts with `DSASM_E_CALLBACK`.
+
+## OpenUtau contract
+
+The OpenUtau binding must:
+
+1. Resolve `dsasm_engine_abi_version` first and require version 3.
+2. Query both mode configs. Retain mode and profile revision as provenance;
+   use a nonzero output compatibility revision in canonical WAV cache keys.
+3. Lazily retain separate real-time and batch engines for each singer.
+4. Use real-time mode when PCM is consumed progressively during playback, and
+   batch mode for ordinary complete rendering and pre-rendering.
+5. Copy `mode`, `vocoder_bucket_frames`, and `overlap_frames` from the selected
+   config into every native request.
+6. Require `32.dsv35` and `384.dsv35` when deciding whether a prepared singer
+   bundle is complete.
+7. Keep the native callback delegate and all pinned request arrays alive until
+   `dsasm_engine_render()` returns.
+
+`Auto` may fall back to ONNX Runtime when the library, CPU, packed graph, or
+mode profile is unavailable. An explicitly selected ASM backend must report the
+native error instead of changing mode or bucket.
+
+Cache keys for packed bundles should include source model hashes, packer and
+format versions, and the ISA profile. Singer names are not sufficient.

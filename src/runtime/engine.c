@@ -27,6 +27,7 @@ typedef struct {
 } vocoder_bucket;
 
 struct dsasm_engine {
+    uint32_t mode;
     DSAsmAcousticModel acoustic;
     DSAsmThreadPool *pool;
     vocoder_bucket *buckets;
@@ -153,6 +154,18 @@ static void free_engine(dsasm_engine *e){
 }
 
 uint32_t dsasm_engine_abi_version(void){return DSASM_ENGINE_ABI_VERSION;}
+int dsasm_engine_mode_config(dsasm_engine_mode mode, dsasm_mode_config *config){
+    if(!config || config->struct_size < sizeof(*config) || config->abi_version != DSASM_ENGINE_ABI_VERSION) return DSASM_E_INVALID;
+    if(mode != DSASM_MODE_REALTIME_STREAMING && mode != DSASM_MODE_BLOCK_BATCH) return DSASM_E_UNSUPPORTED;
+    config->mode=(uint32_t)mode;
+    config->workers=mode==DSASM_MODE_REALTIME_STREAMING?4u:8u;
+    config->region_frames=mode==DSASM_MODE_REALTIME_STREAMING?32u:384u;
+    config->vocoder_bucket_frames=mode==DSASM_MODE_REALTIME_STREAMING?32u:384u;
+    config->overlap_frames=mode==DSASM_MODE_REALTIME_STREAMING?8u:0u;
+    config->profile_revision=2u;
+    config->output_compatibility_revision=mode==DSASM_MODE_BLOCK_BATCH?1u:0u;
+    return DSASM_OK;
+}
 int dsasm_engine_is_supported(char *reason,size_t reason_size){
 #if !defined(__linux__) || !defined(__x86_64__)
     if(reason&&reason_size)snprintf(reason,reason_size,"requires Linux x86-64");
@@ -185,12 +198,25 @@ dsasm_engine *dsasm_engine_create(const char *acoustic_dir,const char *vocoder_d
     rc=load_buckets(e,vocoder_dir);if(rc){set_error(create_error,sizeof(create_error),"vocoder bucket load failed (%d); expected N.dsv35 files",rc);free_engine(e);return NULL;}
     e->error[0]=0;return e;
 }
+dsasm_engine *dsasm_engine_create_mode(const char *acoustic_dir,const char *vocoder_dir,dsasm_engine_mode mode){
+    dsasm_mode_config config={sizeof(config),DSASM_ENGINE_ABI_VERSION,0,0,0,0,0,0,0};
+    if(dsasm_engine_mode_config(mode,&config)!=DSASM_OK){set_error(create_error,sizeof(create_error),"unsupported engine mode %u",(unsigned)mode);return NULL;}
+    dsasm_engine *e=dsasm_engine_create(acoustic_dir,vocoder_dir,(int)config.workers);
+    if(!e)return NULL;
+    if(ds_threadpool_threads(e->pool)!=(size_t)config.workers){size_t actual=ds_threadpool_threads(e->pool);free_engine(e);set_error(create_error,sizeof(create_error),"mode %u requires %u workers; only %zu are available",(unsigned)mode,config.workers,actual);return NULL;}
+    int found=0;for(size_t i=0;i<e->bucket_count;i++)if(e->buckets[i].frames==config.vocoder_bucket_frames){found=1;break;}
+    if(!found){free_engine(e);set_error(create_error,sizeof(create_error),"mode %u requires vocoder bucket %u",(unsigned)mode,config.vocoder_bucket_frames);return NULL;}
+    e->mode=(uint32_t)mode;
+    return e;
+}
 static vocoder_bucket *find_bucket(dsasm_engine *e,uint32_t requested_frames){
     if(!requested_frames)return &e->buckets[0];
     for(size_t i=0;i<e->bucket_count;i++)if(e->buckets[i].frames==requested_frames)return &e->buckets[i];
     return NULL;
 }
 static int cancelled(dsasm_engine *e,uint64_t epoch){return atomic_load_explicit(&e->cancel_epoch,memory_order_relaxed)!=epoch;}
+typedef struct {dsasm_engine *engine;uint64_t epoch;} cancel_context;
+static int acoustic_cancelled(void *userdata){cancel_context *c=userdata;return cancelled(c->engine,c->epoch);}
 int dsasm_engine_render(dsasm_engine *e,const dsasm_request *r,dsasm_pcm_callback callback,void *userdata){
     if(!e||!r||!callback)return DSASM_E_INVALID;
     pthread_mutex_lock(&e->render_mutex);e->error[0]=0;uint64_t epoch=atomic_load_explicit(&e->cancel_epoch,memory_order_relaxed);int rc=DSASM_OK;
@@ -198,6 +224,14 @@ int dsasm_engine_render(dsasm_engine *e,const dsasm_request *r,dsasm_pcm_callbac
     float *noise=NULL,*mel=NULL,*workspace=NULL,*vin=NULL,*vf0=NULL,*wave=NULL,*emit=NULL,*tail=NULL;
 #define RFAIL(code,...) do{rc=fail(e,(code),__VA_ARGS__);goto done;}while(0)
     if(r->abi_version!=DSASM_ENGINE_ABI_VERSION||r->struct_size<sizeof(dsasm_request))RFAIL(DSASM_E_INVALID,"request ABI mismatch");
+    if(r->mode && r->mode!=DSASM_MODE_REALTIME_STREAMING && r->mode!=DSASM_MODE_BLOCK_BATCH)RFAIL(DSASM_E_UNSUPPORTED,"unsupported request mode %u",r->mode);
+    if(e->mode){
+        dsasm_mode_config config={sizeof(config),DSASM_ENGINE_ABI_VERSION,0,0,0,0,0,0,0};
+        if(r->mode!=e->mode)RFAIL(DSASM_E_INVALID,"request mode %u does not match engine mode %u",r->mode,e->mode);
+        if(dsasm_engine_mode_config((dsasm_engine_mode)e->mode,&config)!=DSASM_OK)RFAIL(DSASM_E_INTERNAL,"engine mode configuration is invalid");
+        if(r->vocoder_bucket_frames!=config.vocoder_bucket_frames)RFAIL(DSASM_E_INVALID,"mode %u requires vocoder bucket %u, got %u",e->mode,config.vocoder_bucket_frames,r->vocoder_bucket_frames);
+        if(r->overlap_frames!=config.overlap_frames)RFAIL(DSASM_E_INVALID,"mode %u requires overlap %u, got %u",e->mode,config.overlap_frames,r->overlap_frames);
+    }
     if(!r->token_ids||!r->text_tokens||!r->f0||!r->mel_frames)RFAIL(DSASM_E_INVALID,"tokens, f0, and nonzero dimensions are required");
     vocoder_bucket *bucket=find_bucket(e,r->vocoder_bucket_frames);
     if(!bucket)RFAIL(DSASM_E_UNSUPPORTED,"requested vocoder bucket %u is not loaded",r->vocoder_bucket_frames);
@@ -226,11 +260,12 @@ int dsasm_engine_render(dsasm_engine *e,const dsasm_request *r,dsasm_pcm_callbac
     noise=e->noise_scratch;mel=e->mel_scratch;workspace=e->workspace_scratch;if(r->noise)memcpy(noise,r->noise,NM*sizeof(float));else gaussian(noise,NM,r->noise_seed);
     if(cancelled(e,epoch))RFAIL(DSASM_E_CANCELLED,"render cancelled");
     DSAsmFS2DeploymentInputs inputs={r->language_ids,r->breathiness,r->voicing,r->tension,r->gender,r->velocity,speaker};
+    cancel_context cancel={e,epoch};
     double stage_start=profile?now_ms():0;
-    if(features)rc=ds_acoustic_model_infer_deploy_f32_avx2(&e->acoustic,&inputs,r->token_ids,P,mel2ph,r->f0,T,noise,lo,hi,dims,t_start,scale,steps,mel,workspace,e->pool);
-    else rc=ds_acoustic_model_infer_f32_avx2(&e->acoustic,r->token_ids,P,mel2ph,r->f0,T,noise,lo,hi,dims,t_start,scale,steps,mel,workspace,e->pool);
+    if(features)rc=ds_acoustic_model_infer_deploy_cancel_f32_avx2(&e->acoustic,&inputs,r->token_ids,P,mel2ph,r->f0,T,noise,lo,hi,dims,t_start,scale,steps,mel,workspace,e->pool,acoustic_cancelled,&cancel);
+    else rc=ds_acoustic_model_infer_cancel_f32_avx2(&e->acoustic,r->token_ids,P,mel2ph,r->f0,T,noise,lo,hi,dims,t_start,scale,steps,mel,workspace,e->pool,acoustic_cancelled,&cancel);
     if(profile)acoustic_ms=now_ms()-stage_start;
-    if(rc)RFAIL(DSASM_E_INTERNAL,"acoustic inference failed (%d)",rc);
+    if(rc){if(cancelled(e,epoch))RFAIL(DSASM_E_CANCELLED,"render cancelled");RFAIL(DSASM_E_INTERNAL,"acoustic inference failed (%d)",rc);}
     if(cancelled(e,epoch))RFAIL(DSASM_E_CANCELLED,"render cancelled");
     size_t max_frames=bucket->frames,max_samples=bucket->samples;
     size_t max_mel;if(mul_overflow(max_frames,M,&max_mel))RFAIL(DSASM_E_INVALID,"vocoder dimensions overflow");
@@ -244,7 +279,7 @@ int dsasm_engine_render(dsasm_engine *e,const dsasm_request *r,dsasm_pcm_callbac
         stage_start=profile?now_ms():0;int vr=ds_vocoder_graph_infer(b->graph,vin,vf0,wave,profile&&profile_vocoder_ops_enabled());if(profile)vocoder_ms+=now_ms()-stage_start;if(vr)RFAIL(DSASM_E_INTERNAL,"vocoder inference failed (%d)",vr);if(cancelled(e,epoch))RFAIL(DSASM_E_CANCELLED,"render cancelled");
         size_t spf=b->samples/b->frames,valid_samples=valid*spf;if(tail_n>valid_samples)RFAIL(DSASM_E_INTERNAL,"invalid bucket overlap");memcpy(emit,wave,valid_samples*sizeof(float));
         if(tail_n){for(size_t i=0;i<tail_n;i++){float a=(float)(i+1)/(float)(tail_n+1);emit[i]=tail[i]*(1.f-a)+wave[i]*a;}}
-        int has_future=frame+valid<T;size_t keep_frames=0;if(has_future){keep_frames=r->overlap_frames?r->overlap_frames:8u;if(keep_frames>=valid)keep_frames=valid/2;if(!keep_frames)RFAIL(DSASM_E_UNSUPPORTED,"vocoder bucket is too short for streaming overlap");}
+        int has_future=frame+valid<T;size_t keep_frames=0;if(has_future){keep_frames=e->mode?r->overlap_frames:(r->overlap_frames?r->overlap_frames:8u);if(keep_frames>=valid)keep_frames=valid/2;if(e->mode==DSASM_MODE_REALTIME_STREAMING&&!keep_frames)RFAIL(DSASM_E_UNSUPPORTED,"vocoder bucket is too short for streaming overlap");}
         size_t keep=keep_frames*spf,emit_n=valid_samples-keep;if(keep)memcpy(tail,wave+emit_n,keep*sizeof(float));int is_final=!has_future;
         stage_start=profile?now_ms():0;if(emit_n&&callback(userdata,sample_offset,emit,emit_n,is_final))RFAIL(DSASM_E_CALLBACK,"PCM callback stopped rendering");if(profile)callback_ms+=now_ms()-stage_start;
         sample_offset+=emit_n;tail_n=keep;frame+=valid-keep_frames;

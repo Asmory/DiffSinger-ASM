@@ -14,9 +14,29 @@ extern "C" {
 #define DSASM_API __attribute__((visibility("default")))
 #endif
 
-#define DSASM_ENGINE_ABI_VERSION 2u
+#define DSASM_ENGINE_ABI_VERSION 3u
 
 typedef struct dsasm_engine dsasm_engine;
+
+typedef enum dsasm_engine_mode {
+    DSASM_MODE_REALTIME_STREAMING = 1u,
+    DSASM_MODE_BLOCK_BATCH = 2u
+} dsasm_engine_mode;
+
+typedef struct dsasm_mode_config {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    uint32_t mode;
+    uint32_t workers;
+    uint32_t region_frames;
+    uint32_t vocoder_bucket_frames;
+    uint32_t overlap_frames;
+    /* Incremented when a mode's promoted defaults change. */
+    uint32_t profile_revision;
+    /* Zero forbids canonical PCM cache commit. Equal nonzero values declare
+       product-level cross-mode output compatibility. */
+    uint32_t output_compatibility_revision;
+} dsasm_mode_config;
 
 enum {
     DSASM_OK = 0,
@@ -73,6 +93,9 @@ typedef struct dsasm_request {
     /* Exact fixed-shape vocoder bucket used for the whole request. Zero
        selects the smallest loaded bucket. */
     uint32_t vocoder_bucket_frames;
+    /* Zero is reserved for the advanced benchmark engine. Product mode
+       engines require one of dsasm_engine_mode. */
+    uint32_t mode;
 } dsasm_request;
 
 static inline dsasm_request dsasm_request_init(void) {
@@ -82,6 +105,17 @@ static inline dsasm_request dsasm_request_init(void) {
     return request;
 }
 #define DSASM_REQUEST_INIT dsasm_request_init()
+static inline dsasm_request dsasm_request_init_mode(dsasm_engine_mode mode) {
+    dsasm_request request = dsasm_request_init();
+    request.mode = (uint32_t)mode;
+    if (mode == DSASM_MODE_REALTIME_STREAMING) {
+        request.vocoder_bucket_frames = 32u;
+        request.overlap_frames = 8u;
+    } else if (mode == DSASM_MODE_BLOCK_BATCH) {
+        request.vocoder_bucket_frames = 384u;
+    }
+    return request;
+}
 
 /* PCM is mono float32 and is valid only during the callback. Return zero to
    continue. A nonzero return stops rendering with DSASM_E_CALLBACK. */
@@ -96,10 +130,16 @@ DSASM_API uint32_t dsasm_engine_abi_version(void);
 /* Returns 1 when this build can run on the current OS/CPU. On failure, reason
    receives a short UTF-8 explanation when it is non-NULL and reason_size > 0. */
 DSASM_API int dsasm_engine_is_supported(char *reason, size_t reason_size);
+/* config must carry its struct size and ABI version before this call. */
+DSASM_API int dsasm_engine_mode_config(dsasm_engine_mode mode, dsasm_mode_config *config);
 DSASM_API dsasm_engine *dsasm_engine_create(
     const char *packed_acoustic_dir,
     const char *vocoder_bundle_dir,
     int workers);
+DSASM_API dsasm_engine *dsasm_engine_create_mode(
+    const char *packed_acoustic_dir,
+    const char *vocoder_bundle_dir,
+    dsasm_engine_mode mode);
 DSASM_API int dsasm_engine_render(
     dsasm_engine *engine,
     const dsasm_request *request,

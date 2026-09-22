@@ -214,3 +214,22 @@ int ds_acoustic_model_infer_deploy_f32_avx2(
     return ds_full_acoustic_infer_deploy_normfast_f32_avx2(&m->fs2,&m->fs2_extras,inputs,&m->aux,&m->rf,
         tok,P,mel2ph,f0,T,noise,lo,hi,rd,t0,scale,steps,out,ws,pool);
 }
+
+int ds_acoustic_model_infer_cancel_f32_avx2(
+    const DSAsmAcousticModel*m,const int32_t*tok,size_t P,const int32_t*mel2ph,const float*f0,size_t T,
+    const float*noise,const float*lo,const float*hi,size_t rd,float t0,float scale,size_t steps,
+    float*out,float*ws,DSAsmThreadPool*pool,DSAsmCancelCheck cancel_check,void*cancel_userdata){
+    if(!ds_acoustic_model_valid(m))return -1;
+    return ds_full_acoustic_infer_normfast_cancel_f32_avx2(&m->fs2,&m->aux,&m->rf,tok,P,mel2ph,f0,T,
+        noise,lo,hi,rd,t0,scale,steps,out,ws,pool,cancel_check,cancel_userdata);
+}
+
+int ds_acoustic_model_infer_deploy_cancel_f32_avx2(
+    const DSAsmAcousticModel*m,const DSAsmFS2DeploymentInputs*inputs,
+    const int32_t*tok,size_t P,const int32_t*mel2ph,const float*f0,size_t T,
+    const float*noise,const float*lo,const float*hi,size_t rd,float t0,float scale,size_t steps,
+    float*out,float*ws,DSAsmThreadPool*pool,DSAsmCancelCheck cancel_check,void*cancel_userdata){
+    if(!ds_acoustic_model_valid(m))return -1;
+    return ds_full_acoustic_infer_deploy_normfast_cancel_f32_avx2(&m->fs2,&m->fs2_extras,inputs,&m->aux,&m->rf,
+        tok,P,mel2ph,f0,T,noise,lo,hi,rd,t0,scale,steps,out,ws,pool,cancel_check,cancel_userdata);
+}

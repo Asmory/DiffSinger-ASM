@@ -103,6 +103,19 @@ int ds_acoustic_reflow_decode_normsrc_f32_avx2(
     const float *frame_mask_t,const float *spec_min,const float *spec_max,size_t range_dims,
     float t_start,float time_scale_factor,size_t steps,float *output_mel_tc,
     float *workspace,size_t frames,DSAsmThreadPool *pool) {
+    return ds_acoustic_reflow_decode_normsrc_cancel_f32_avx2(
+        w,condition_tc,aux_norm_tc,noise_tc,frame_mask_t,spec_min,spec_max,
+        range_dims,t_start,time_scale_factor,steps,output_mel_tc,workspace,
+        frames,pool,NULL,NULL);
+}
+
+int ds_acoustic_reflow_decode_normsrc_cancel_f32_avx2(
+    const DSAsmLynxNet2Weights *w,
+    const float *condition_tc,const float *aux_norm_tc,const float *noise_tc,
+    const float *frame_mask_t,const float *spec_min,const float *spec_max,size_t range_dims,
+    float t_start,float time_scale_factor,size_t steps,float *output_mel_tc,
+    float *workspace,size_t frames,DSAsmThreadPool *pool,
+    DSAsmCancelCheck cancel_check,void *cancel_userdata) {
     if (!acoustic_valid(w, frames) || !output_mel_tc || !workspace) return -1;
     const size_t dims=(size_t)w->input_dim, elems=frames*dims;
     if (!range_valid(spec_min,spec_max,range_dims,dims)) return -1;
@@ -129,9 +142,9 @@ int ds_acoustic_reflow_decode_normsrc_f32_avx2(
         }
         src_ptr=output_mel_tc;
     }
-    int rc=ds_reflow_euler_sample_f32_avx2(
+    int rc=ds_reflow_euler_sample_cancel_f32_avx2(
         w,noise_tc,src_ptr,condition_tc,t_start,time_scale_factor,steps,
-        output_mel_tc,workspace,frames,pool);
+        output_mel_tc,workspace,frames,pool,cancel_check,cancel_userdata);
     if(rc)return rc;
     rc=ds_reflow_denorm_spec_f32(output_mel_tc,spec_min,spec_max,range_dims,
         output_mel_tc,frames,dims);

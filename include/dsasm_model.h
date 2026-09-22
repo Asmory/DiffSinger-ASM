@@ -5,6 +5,7 @@
 #include "dsasm_fs2_encoder.h"
 #include "dsasm_aux_decoder.h"
 #include "dsasm_lynxnet2.h"
+#include "dsasm_reflow.h"
 #include "dsasm_threadpool.h"
 #ifdef __cplusplus
 extern "C" {
@@ -62,6 +63,24 @@ int ds_acoustic_model_infer_deploy_f32_avx2(
     const float *spec_min,const float *spec_max,size_t range_dims,
     float t_start,float time_scale_factor,size_t steps,
     float *output_mel_tc,float *workspace,DSAsmThreadPool *pool);
+int ds_acoustic_model_infer_cancel_f32_avx2(
+    const DSAsmAcousticModel *m,
+    const int32_t *token_ids,size_t text_tokens,
+    const int32_t *mel2ph,const float *f0,size_t mel_frames,
+    const float *noise_tc,
+    const float *spec_min,const float *spec_max,size_t range_dims,
+    float t_start,float time_scale_factor,size_t steps,
+    float *output_mel_tc,float *workspace,DSAsmThreadPool *pool,
+    DSAsmCancelCheck cancel_check,void *cancel_userdata);
+int ds_acoustic_model_infer_deploy_cancel_f32_avx2(
+    const DSAsmAcousticModel *m,const DSAsmFS2DeploymentInputs *inputs,
+    const int32_t *token_ids,size_t text_tokens,
+    const int32_t *mel2ph,const float *f0,size_t mel_frames,
+    const float *noise_tc,
+    const float *spec_min,const float *spec_max,size_t range_dims,
+    float t_start,float time_scale_factor,size_t steps,
+    float *output_mel_tc,float *workspace,DSAsmThreadPool *pool,
+    DSAsmCancelCheck cancel_check,void *cancel_userdata);
 
 #ifdef __cplusplus
 }

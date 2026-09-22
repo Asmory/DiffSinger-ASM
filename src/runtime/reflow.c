@@ -62,7 +62,9 @@ static int sample_cached(
     float *x,
     float *workspace,
     size_t frames,
-    DSAsmThreadPool *pool) {
+    DSAsmThreadPool *pool,
+    DSAsmCancelCheck cancel_check,
+    void *cancel_userdata) {
     if (!reflow_valid(w, frames) || !cond_cache || !x || !workspace) return -1;
     if (!isfinite(t_start) || !isfinite(time_scale_factor) || t_start < 0.0f) return -1;
     if (t_start > 1.0f) t_start = 1.0f;
@@ -97,6 +99,7 @@ static int sample_cached(
     float *den_ws = velocity + elems;
 
     for (size_t i = 0; i < steps; ++i) {
+        if (cancel_check && cancel_check(cancel_userdata)) return -1;
         const float t = t_start + (float)i * dt;
         const float timestep = time_scale_factor * t;
         int rc;
@@ -108,6 +111,7 @@ static int sample_cached(
                 w, x, cond_cache, timestep, velocity, den_ws, frames);
         }
         if (rc) return rc;
+        if (cancel_check && cancel_check(cancel_userdata)) return -1;
         for (size_t j = 0; j < elems; ++j) {
             const float delta = velocity[j] * dt;
             x[j] = x[j] + delta;
@@ -129,7 +133,7 @@ int ds_reflow_euler_sample_cached_condition_f32_avx2(
     size_t frames,
     DSAsmThreadPool *pool) {
     return sample_cached(w, noise, src_norm, cond_cache, t_start, time_scale_factor,
-                         steps, out, workspace, frames, pool);
+                         steps, out, workspace, frames, pool, NULL, NULL);
 }
 
 int ds_reflow_euler_sample_f32_avx2(
@@ -144,12 +148,32 @@ int ds_reflow_euler_sample_f32_avx2(
     float *workspace,
     size_t frames,
     DSAsmThreadPool *pool) {
+    return ds_reflow_euler_sample_cancel_f32_avx2(
+        w, noise, src_norm, condition, t_start, time_scale_factor, steps,
+        out, workspace, frames, pool, NULL, NULL);
+}
+
+int ds_reflow_euler_sample_cancel_f32_avx2(
+    const DSAsmLynxNet2Weights *w,
+    const float *noise,
+    const float *src_norm,
+    const float *condition,
+    float t_start,
+    float time_scale_factor,
+    size_t steps,
+    float *out,
+    float *workspace,
+    size_t frames,
+    DSAsmThreadPool *pool,
+    DSAsmCancelCheck cancel_check,
+    void *cancel_userdata) {
     if (!reflow_valid(w, frames) || !workspace) return -1;
     if (t_start >= 1.0f || steps == 0) {
         /* Upstream performs no velocity_fn call in these cases, so the
            conditioner projection is unnecessary as well. */
         return sample_cached(w, noise, src_norm, workspace, t_start, time_scale_factor,
-                             steps, out, workspace, frames, pool);
+                             steps, out, workspace, frames, pool,
+                             cancel_check, cancel_userdata);
     }
     if (!condition) return -1;
     float *cond_cache = workspace;
@@ -161,6 +185,8 @@ int ds_reflow_euler_sample_f32_avx2(
         rc = ds_lynxnet2_prepare_condition_f32_avx2(w, condition, cond_cache, frames);
     }
     if (rc) return rc;
+    if (cancel_check && cancel_check(cancel_userdata)) return -1;
     return sample_cached(w, noise, src_norm, cond_cache, t_start, time_scale_factor,
-                         steps, out, workspace, frames, pool);
+                         steps, out, workspace, frames, pool,
+                         cancel_check, cancel_userdata);
 }

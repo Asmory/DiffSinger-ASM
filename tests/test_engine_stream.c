@@ -26,7 +26,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: %s PACKED_ACOUSTIC VOCODER_BUCKET_DIR_OR_FILE\n", argv[0]);
         return 2;
     }
-    dsasm_engine *engine = dsasm_engine_create(argv[1], argv[2], 8);
+    dsasm_engine *engine = dsasm_engine_create_mode(
+        argv[1], argv[2], DSASM_MODE_REALTIME_STREAMING);
     if (!engine) {
         fprintf(stderr, "create: %s\n", dsasm_engine_last_create_error());
         return 3;
@@ -37,7 +38,7 @@ int main(int argc, char **argv) {
     if (!f0 || !speaker) return 4;
     for (size_t i = 0; i < FRAMES; i++) f0[i] = 220.f;
 
-    dsasm_request request = DSASM_REQUEST_INIT;
+    dsasm_request request = dsasm_request_init_mode(DSASM_MODE_REALTIME_STREAMING);
     request.flags = DSASM_REQUEST_USE_DEPTH | DSASM_REQUEST_USE_STEPS;
     request.token_ids = &token;
     request.text_tokens = 1;
@@ -50,8 +51,6 @@ int main(int argc, char **argv) {
     request.noise_seed = UINT64_C(123456789);
     request.depth = .6f;
     request.steps = 1;
-    request.overlap_frames = 8;
-    request.vocoder_bucket_frames = 32;
 
     CallbackState state = {0};
     int rc = dsasm_engine_render(engine, &request, on_pcm, &state);
@@ -63,10 +62,10 @@ int main(int argc, char **argv) {
             (unsigned long long)state.next_offset, expected, state.callbacks, state.finals);
         return 5;
     }
-    request.vocoder_bucket_frames = 33;
+    request.mode = DSASM_MODE_BLOCK_BATCH;
     rc = dsasm_engine_render(engine, &request, on_pcm, &state);
-    if (rc != DSASM_E_UNSUPPORTED) {
-        fprintf(stderr, "missing bucket rc=%d error=%s\n", rc,
+    if (rc != DSASM_E_INVALID) {
+        fprintf(stderr, "mismatched mode rc=%d error=%s\n", rc,
             dsasm_engine_last_error(engine));
         return 6;
     }

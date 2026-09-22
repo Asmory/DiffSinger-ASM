@@ -42,6 +42,19 @@ int ds_acoustic_post_fs2_normfast_f32_avx2(
     const float *spec_min,const float *spec_max,size_t range_dims,
     float t_start,float time_scale_factor,size_t steps,float *output_mel_tc,
     float *workspace,size_t frames,DSAsmThreadPool *pool){
+    return ds_acoustic_post_fs2_normfast_cancel_f32_avx2(
+        aux,rf,condition_tc,noise_tc,frame_mask_t,spec_min,spec_max,range_dims,
+        t_start,time_scale_factor,steps,output_mel_tc,workspace,frames,pool,
+        NULL,NULL);
+}
+
+int ds_acoustic_post_fs2_normfast_cancel_f32_avx2(
+    const DSAsmAuxConvNeXtWeights *aux,const DSAsmLynxNet2Weights *rf,
+    const float *condition_tc,const float *noise_tc,const float *frame_mask_t,
+    const float *spec_min,const float *spec_max,size_t range_dims,
+    float t_start,float time_scale_factor,size_t steps,float *output_mel_tc,
+    float *workspace,size_t frames,DSAsmThreadPool *pool,
+    DSAsmCancelCheck cancel_check,void *cancel_userdata){
     if(!aux||!rf||!condition_tc||!noise_tc||!spec_min||!spec_max||!output_mel_tc||!workspace||!frames)return -1;
     if(aux->output_dim!=rf->input_dim||aux->input_dim!=rf->condition_dim)return -2;
     size_t aw=ds_aux_convnext_workspace_floats(aux,frames);if(!aw)return -3;
@@ -50,6 +63,8 @@ int ds_acoustic_post_fs2_normfast_f32_avx2(
     float*rf_ws=aux_norm+frames*aux->output_dim;
     int rc=ds_aux_convnext_forward_norm_f32_avx2(aux,condition_tc,aux_norm,aux_ws,frames,pool);
     if(rc)return rc;
-    return ds_acoustic_reflow_decode_normsrc_f32_avx2(rf,condition_tc,aux_norm,noise_tc,frame_mask_t,
-        spec_min,spec_max,range_dims,t_start,time_scale_factor,steps,output_mel_tc,rf_ws,frames,pool);
+    if(cancel_check&&cancel_check(cancel_userdata))return -1;
+    return ds_acoustic_reflow_decode_normsrc_cancel_f32_avx2(rf,condition_tc,aux_norm,noise_tc,frame_mask_t,
+        spec_min,spec_max,range_dims,t_start,time_scale_factor,steps,output_mel_tc,rf_ws,frames,pool,
+        cancel_check,cancel_userdata);
 }

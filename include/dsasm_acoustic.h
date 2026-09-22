@@ -72,6 +72,13 @@ int ds_acoustic_reflow_decode_normsrc_f32_avx2(
     const float *frame_mask_t,const float *spec_min,const float *spec_max,size_t range_dims,
     float t_start,float time_scale_factor,size_t steps,float *output_mel_tc,
     float *workspace,size_t frames,DSAsmThreadPool *pool);
+int ds_acoustic_reflow_decode_normsrc_cancel_f32_avx2(
+    const DSAsmLynxNet2Weights *w,
+    const float *condition_tc,const float *aux_norm_tc,const float *noise_tc,
+    const float *frame_mask_t,const float *spec_min,const float *spec_max,size_t range_dims,
+    float t_start,float time_scale_factor,size_t steps,float *output_mel_tc,
+    float *workspace,size_t frames,DSAsmThreadPool *pool,
+    DSAsmCancelCheck cancel_check,void *cancel_userdata);
 
 size_t ds_acoustic_post_fs2_normfast_workspace_floats(
     const DSAsmAuxConvNeXtWeights *aux,const DSAsmLynxNet2Weights *rf,size_t frames);
@@ -81,6 +88,13 @@ int ds_acoustic_post_fs2_normfast_f32_avx2(
     const float *spec_min,const float *spec_max,size_t range_dims,
     float t_start,float time_scale_factor,size_t steps,float *output_mel_tc,
     float *workspace,size_t frames,DSAsmThreadPool *pool);
+int ds_acoustic_post_fs2_normfast_cancel_f32_avx2(
+    const DSAsmAuxConvNeXtWeights *aux,const DSAsmLynxNet2Weights *rf,
+    const float *condition_tc,const float *noise_tc,const float *frame_mask_t,
+    const float *spec_min,const float *spec_max,size_t range_dims,
+    float t_start,float time_scale_factor,size_t steps,float *output_mel_tc,
+    float *workspace,size_t frames,DSAsmThreadPool *pool,
+    DSAsmCancelCheck cancel_check,void *cancel_userdata);
 
 #ifdef __cplusplus
 }

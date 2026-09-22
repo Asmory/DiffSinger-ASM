@@ -8,6 +8,8 @@
 extern "C" {
 #endif
 
+typedef int (*DSAsmCancelCheck)(void *userdata);
+
 /* M18: OpenVPI RectifiedFlow Euler inference, normalized-domain core.
    Tensor layout is [T,D] (frames-major), equivalent to the acoustic model's
    [B=1,F=1,M,T] after the Python transposes.  Noise is supplied by the caller
@@ -65,6 +67,21 @@ int ds_reflow_euler_sample_f32_avx2(
     float *workspace,
     size_t frames,
     DSAsmThreadPool *pool);
+
+int ds_reflow_euler_sample_cancel_f32_avx2(
+    const DSAsmLynxNet2Weights *w,
+    const float *noise_tc,
+    const float *src_norm_tc,
+    const float *condition_tc,
+    float t_start,
+    float time_scale_factor,
+    size_t steps,
+    float *output_norm_tc,
+    float *workspace,
+    size_t frames,
+    DSAsmThreadPool *pool,
+    DSAsmCancelCheck cancel_check,
+    void *cancel_userdata);
 
 #ifdef __cplusplus
 }

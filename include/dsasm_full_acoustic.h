@@ -45,6 +45,25 @@ int ds_full_acoustic_infer_deploy_normfast_f32_avx2(
     const float *noise_tc,const float *spec_min,const float *spec_max,size_t range_dims,
     float t_start,float time_scale_factor,size_t steps,
     float *output_mel_tc,float *workspace,DSAsmThreadPool *pool);
+int ds_full_acoustic_infer_normfast_cancel_f32_avx2(
+    const DSAsmFS2AcousticWeights *fs2,const DSAsmAuxConvNeXtWeights *aux,
+    const DSAsmLynxNet2Weights *rf,
+    const int32_t *token_ids,size_t text_tokens,
+    const int32_t *mel2ph,const float *f0,size_t mel_frames,
+    const float *noise_tc,const float *spec_min,const float *spec_max,size_t range_dims,
+    float t_start,float time_scale_factor,size_t steps,
+    float *output_mel_tc,float *workspace,DSAsmThreadPool *pool,
+    DSAsmCancelCheck cancel_check,void *cancel_userdata);
+int ds_full_acoustic_infer_deploy_normfast_cancel_f32_avx2(
+    const DSAsmFS2AcousticWeights *fs2,const DSAsmFS2DeploymentExtras *extras,
+    const DSAsmFS2DeploymentInputs *inputs,
+    const DSAsmAuxConvNeXtWeights *aux,const DSAsmLynxNet2Weights *rf,
+    const int32_t *token_ids,size_t text_tokens,
+    const int32_t *mel2ph,const float *f0,size_t mel_frames,
+    const float *noise_tc,const float *spec_min,const float *spec_max,size_t range_dims,
+    float t_start,float time_scale_factor,size_t steps,
+    float *output_mel_tc,float *workspace,DSAsmThreadPool *pool,
+    DSAsmCancelCheck cancel_check,void *cancel_userdata);
 
 #ifdef __cplusplus
 }

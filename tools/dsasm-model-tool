@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+package_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+export DSASM_PROVIDER_BUILD_ID=$(<"$package_root/share/dsasm-model-tool/provider-build-id")
+exec "$package_root/share/dsasm-model-tool/python/bin/python3.12" \
+  "$package_root/share/dsasm-model-tool/app/dsasm_model_tool.py" "$@"

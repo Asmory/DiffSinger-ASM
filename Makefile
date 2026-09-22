@@ -20,7 +20,7 @@ M31_ACOUSTIC_ROUNDS ?= 2
 M31_VOCODER_ROUNDS ?= 3
 M31_PROFILE_RUNS ?= 3
 
-.PHONY: all test bench engine engine-check engine-real-stream-check m6 m7 m7-bench m8 m8-bench m9 m9-bench m9-autotune m10 m10-bench m10-autotune m11 m11-bench m11-autotune m12 m12-bench m12-spin-bench m12-perf m13 m13-bench m13-kernel-bench m13-perf m14 m14-bench m14-perf m14-pytorch-check m15 m15-bench m15-perf m15-kernel-bench m15-pytorch-check m16 m16-bench m16-perf m16-pytorch-check m17 m17-bench m17-perf m17-pytorch-check m18 m18-bench m18-pytorch-check m19 m19-bench m19-pytorch-check m20 m20-bench m20-pytorch-check m20-fs2-front-check m20-postfs2-check m21 m21-bench m21-pytorch-check m21-condition-check m21-full-check m21-pack-check m22 m22-bench m22-check m23 m23-bench m23-check m23-model-check m24 m24-check m24-pack-check m25-deploy-check m29-check m30-check m31 m31-check m31-real-sprint pytorch-check bundle-check m7-pytorch-check m7-bundle-check m8-pytorch-check m9-pytorch-check m10-pytorch-check m11-pytorch-check m12-pytorch-check m13-pytorch-check verify clean m32 m32-check m32-real-kernel m33 m33-check m33-real-blocks m34 m34-check m34-real-ct
+.PHONY: all test bench engine engine-check engine-real-stream-check model-tool-check m6 m7 m7-bench m8 m8-bench m9 m9-bench m9-autotune m10 m10-bench m10-autotune m11 m11-bench m11-autotune m12 m12-bench m12-spin-bench m12-perf m13 m13-bench m13-kernel-bench m13-perf m14 m14-bench m14-perf m14-pytorch-check m15 m15-bench m15-perf m15-kernel-bench m15-pytorch-check m16 m16-bench m16-perf m16-pytorch-check m17 m17-bench m17-perf m17-pytorch-check m18 m18-bench m18-pytorch-check m19 m19-bench m19-pytorch-check m20 m20-bench m20-pytorch-check m20-fs2-front-check m20-postfs2-check m21 m21-bench m21-pytorch-check m21-condition-check m21-full-check m21-pack-check m22 m22-bench m22-check m23 m23-bench m23-check m23-model-check m24 m24-check m24-pack-check m25-deploy-check m29-check m30-check m31 m31-check m31-real-sprint pytorch-check bundle-check m7-pytorch-check m7-bundle-check m8-pytorch-check m9-pytorch-check m10-pytorch-check m11-pytorch-check m12-pytorch-check m13-pytorch-check verify clean m32 m32-check m32-real-kernel m33 m33-check m33-real-blocks m34 m34-check m34-real-ct
 .PHONY: package
 
 all: $(BUILD)/test_fused_glu $(BUILD)/test_fused_glu_m2 \
@@ -821,6 +821,9 @@ $(BUILD)/test_engine_stream: tests/test_engine_stream.c $(BUILD)/libdsasm.so
 $(BUILD)/bench_engine_stream: tools/bench_engine_stream.c $(BUILD)/libdsasm.so
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -L$(BUILD) -Wl,-rpath,'$$ORIGIN' -ldsasm -o $@ -lm
 
+$(BUILD)/bench_engine_cancel: tools/bench_engine_cancel.c $(BUILD)/libdsasm.so
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< -L$(BUILD) -Wl,-rpath,'$$ORIGIN' -ldsasm -o $@ -lm -pthread
+
 $(BUILD)/probe_stage_pipeline: tools/probe_stage_pipeline.c $(M24_OBJS) $(M35_VOCODER_OBJS)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(sort $(M24_OBJS) $(M35_VOCODER_OBJS)) -o $@ -lm -pthread
 
@@ -834,7 +837,11 @@ engine-check: $(BUILD)/test_engine_abi
 
 engine: engine-check
 
-package: engine-check $(BUILD)/dsasm-acoustic $(BUILD)/dsasm-vocoder-m40
+model-tool-check:
+	$(PYTHON) -m py_compile tools/dsasm_model_tool.py
+	$(PYTHON) -m unittest -v tests.test_model_tool
+
+package: engine-check model-tool-check $(BUILD)/dsasm-acoustic $(BUILD)/dsasm-vocoder-m40
 	./tools/package-engine.sh "$(VERSION)" "$(DIST)"
 
 engine-real-stream-check: $(BUILD)/test_engine_stream

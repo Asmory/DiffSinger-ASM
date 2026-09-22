@@ -484,6 +484,22 @@ def pack_rf(G,out):
     hdr=struct.pack('<8s12I8x',b'DSLYNX7\0',1,I,Q,C,Hid,len(ids),31,glu_code,4,16,4,8);secs=write_blob(out/'lynxnet2.dsn',hdr,arr)
     return {'magic':'DSLYNX7','input_dim':I,'condition_dim':Q,'channels':C,'hidden_dim':Hid,'num_layers':len(ids),'glu':glu,'sections':secs}
 
+def preflight_onnx(path):
+    """Run the production graph/weight checks without writing packed files."""
+    m=onnx.load(path,load_external_data=True);G=Graph(m)
+    original=globals()['write_blob']
+    globals()['write_blob']=lambda _path,_header,_arrays: []
+    try:
+        fs=pack_fs2(G,Path('.'));au=pack_aux(G,Path('.'));rf=pack_rf(G,Path('.'))
+        mul=G.find('/aux_decoder/Mul','Mul');add=G.find('/aux_decoder/Add','Add')
+        k=G.value(mul.input[1]);b=G.value([z for z in add.input if z!=mul.output[0]][0])
+        lo=f32(b-k).reshape(-1);hi=f32(b+k).reshape(-1)
+        if lo.size not in (1,rf['input_dim']) or hi.size!=lo.size:
+            raise ValueError(f'spectral range dims {lo.size}/{hi.size}, expected 1 or {rf["input_dim"]}')
+        return {'fs2':fs,'aux':au,'rf':rf,'spec_range_dims':int(lo.size)}
+    finally:
+        globals()['write_blob']=original
+
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('onnx',type=Path);ap.add_argument('--model-dir',type=Path);ap.add_argument('--out',type=Path,default=Path('packed_onnx_m25'));a=ap.parse_args();a.out.mkdir(parents=True,exist_ok=True)
     m=onnx.load(a.onnx,load_external_data=True);G=Graph(m);print(f'M25 ONNX: nodes(recursive)={len(G.nodes)} initializers={len(G.init)} inputs={sorted(G.inputs)}')

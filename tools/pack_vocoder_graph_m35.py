@@ -9,8 +9,9 @@ def attr_dict(node, onnx):
 
 def main():
     ap=argparse.ArgumentParser(description='Compile fixed-shape NSF-HiFiGAN ONNX to DSVOC35 pure-native bundle')
-    ap.add_argument('onnx');ap.add_argument('--frames',type=int,default=48);ap.add_argument('--out',required=True);ap.add_argument('--work',required=True);ap.add_argument('--seed',type=int,default=35);ap.add_argument('--enable-residual-fusion',action='store_true',help='M38 experiment; disabled by default in M39 because target-machine A/B regressed');ap.add_argument('--residual-scope',choices=['none','full64','k7ge128','all3711'],default='none',help='residual fusion scope; all3711 enables every aligned K3/K7/K11 residual stage including 2-D late stages');ap.add_argument('--vnni-scope',choices=['none','stage128','all-k711'],default='stage128',help='M40: embed prequantized AVX-VNNI weights; runtime DSASM_VNNI selects whether to execute them')
+    ap.add_argument('onnx');ap.add_argument('--frames',type=int,default=48);ap.add_argument('--out');ap.add_argument('--work');ap.add_argument('--preflight',action='store_true');ap.add_argument('--seed',type=int,default=35);ap.add_argument('--enable-residual-fusion',action='store_true',help='M38 experiment; disabled by default in M39 because target-machine A/B regressed');ap.add_argument('--residual-scope',choices=['none','full64','k7ge128','all3711'],default='none',help='residual fusion scope; all3711 enables every aligned K3/K7/K11 residual stage including 2-D late stages');ap.add_argument('--vnni-scope',choices=['none','stage128','all-k711'],default='stage128',help='M40: embed prequantized AVX-VNNI weights; runtime DSASM_VNNI selects whether to execute them')
     a=ap.parse_args()
+    if not a.preflight and (not a.out or not a.work):ap.error('--out and --work are required unless --preflight is used')
     import onnx, onnxruntime as ort
     from onnx import numpy_helper, helper, TensorProto
     m=onnx.load(a.onnx);g=m.graph; init={x.name:numpy_helper.to_array(x) for x in g.initializer}
@@ -28,13 +29,18 @@ def main():
         for name in n.output:
             if name and name not in existing:
                 dbg.graph.output.append(helper.make_tensor_value_info(name,TensorProto.FLOAT,None));existing.add(name)
-    w=Path(a.work);w.mkdir(parents=True,exist_ok=True);dbg_path=w/'m35_shape_debug.onnx';onnx.save(dbg,dbg_path)
     so=ort.SessionOptions();so.graph_optimization_level=ort.GraphOptimizationLevel.ORT_DISABLE_ALL
-    sess=ort.InferenceSession(str(dbg_path),so,providers=['CPUExecutionProvider'])
+    if a.preflight:
+        sess=ort.InferenceSession(dbg.SerializeToString(),so,providers=['CPUExecutionProvider'])
+        w=None
+    else:
+        w=Path(a.work);w.mkdir(parents=True,exist_ok=True);dbg_path=w/'m35_shape_debug.onnx';onnx.save(dbg,dbg_path)
+        sess=ort.InferenceSession(str(dbg_path),so,providers=['CPUExecutionProvider'])
     out_names=[o.name for o in sess.get_outputs()]; vals=sess.run(out_names,feed); captured=dict(zip(out_names,vals))
     # Original golden is taken from the same unoptimized math graph; ORT is offline only.
     wave=np.asarray(captured.get('waveform',vals[0]),dtype=np.float32).reshape(-1)
-    mel.reshape(-1).tofile(w/'mel.f32');f0.reshape(-1).tofile(w/'f0.f32');wave.tofile(w/'golden_wave.f32')
+    if w is not None:
+        mel.reshape(-1).tofile(w/'mel.f32');f0.reshape(-1).tofile(w/'f0.f32');wave.tofile(w/'golden_wave.f32')
     shapes={'mel':mel.shape,'f0':f0.shape};shapes.update({k:np.asarray(v).shape for k,v in captured.items()})
     b=Builder(a.frames,128,wave.size); ids={}
     ids['mel']=b.add_work(mel.shape);ids['f0']=b.add_work(f0.shape)
@@ -195,8 +201,10 @@ def main():
             wid=b.add_const(wom);bid=b.add_const(bias);b.add_op(typ,[input_id(n.input[0]),wid,bid],oid,p=[Cin,Cout,K,int(xshape[2]),int(pads[0]),int(strides[0])]);cts+=1
     if 'waveform' not in ids:raise SystemExit(f'waveform tensor not found, outputs={list(ids)[-20:]}')
     naive_arena,planned_arena=b.plan_arena_lifetimes(ids['mel'],ids['f0'],ids['waveform'])
-    outp=b.write(a.out,ids['mel'],ids['f0'],ids['waveform'])
     meta={'format':'DSVOC35','frames':a.frames,'mel_bins':128,'samples':wave.size,'nodes':len(g.node),'ops':len(b.ops),'tensors':len(b.tensors),'arena_floats':b.arena,'arena_mib':b.arena*4/2**20,'arena_naive_mib':naive_arena*4/2**20,'arena_reduction_x':(naive_arena/planned_arena if planned_arena else 1.0),'const_mib':len(b.const)/2**20,'conv':convs,'convtranspose':cts,'fused_leaky_conv':fused_leaky_count,'fused_residual_add':fused_residual_count,'pack8_conv':pack8_count,'conv2d_candidates_8w':conv2d_candidates,'vnni_candidates':vnni_candidates,'vnni_scope':a.vnni_scope,'conv_shapes':conv_shapes,'supported_ops':sorted(OPS),'revision':'M40-selective-vnni-stage128'+(('-residual-'+a.residual_scope) if a.residual_scope!='none' else ('-residual-experimental' if a.enable_residual_fusion else ''))}
+    if a.preflight:
+        print(json.dumps({'preflight':'ok',**meta},sort_keys=True));return
+    outp=b.write(a.out,ids['mel'],ids['f0'],ids['waveform'])
     Path(str(Path(a.out).with_suffix('.json'))).write_text(json.dumps(meta,indent=2),encoding='utf-8')
     print('M35 packed pure-native vocoder:',json.dumps(meta))
     print('bundle:',outp);print('sample mel/f0/golden:',w/'mel.f32',w/'f0.f32',w/'golden_wave.f32')

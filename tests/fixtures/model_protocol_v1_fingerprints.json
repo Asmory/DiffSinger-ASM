@@ -1,0 +1,57 @@
+{
+  "schema": "org.openutau.dsasm-fingerprint-vectors",
+  "schema_version": 1,
+  "purpose": "Aggregate fingerprint algorithm only; artifacts are not valid model bundles.",
+  "source": {
+    "artifacts": [
+      {
+        "role": "acoustic.onnx",
+        "path": "acoustic.onnx",
+        "content_utf8": "acoustic\n",
+        "size": 9,
+        "sha256": "0f4cf46c44a39d74dbf2a9431d6a1ba2b71e2e2970271e74c18bc1c03e9f8644"
+      },
+      {
+        "role": "config.dsconfig",
+        "path": "dsconfig.yaml",
+        "content_utf8": "sample_rate: 44100\nhop_size: 512\nnum_mel_bins: 128\n",
+        "size": 51,
+        "sha256": "82a4e594e20181063184fac23ac552ae03e879ac6a3b470f5b030876005a6ff3"
+      },
+      {
+        "role": "vocoder.onnx",
+        "path": "dsvocoder/nsf_hifigan.onnx",
+        "content_utf8": "vocoder\n",
+        "size": 8,
+        "sha256": "f55cf7de6492ba37a70d1ac94872a54585794a7c5bd0c1a6f5210d20fa045a62"
+      }
+    ],
+    "fingerprint": "fcb12b9bb665e54930c44974c1a79ab2a59e8670d308bf84098aa3687d1c7b06"
+  },
+  "bundle": {
+    "source_fingerprint": "fcb12b9bb665e54930c44974c1a79ab2a59e8670d308bf84098aa3687d1c7b06",
+    "converter_revision": "test-v1",
+    "isa_profile": "avx2-fma",
+    "formats": [
+      {"role": "acoustic.fs2", "version": "DSFS25/1"},
+      {"role": "vocoder.32", "version": "DSVOC35/1"}
+    ],
+    "artifacts": [
+      {
+        "role": "acoustic.fs2",
+        "path": "acoustic/fs2_acoustic.dsfs",
+        "content_utf8": "fs2",
+        "size": 3,
+        "sha256": "56c4d2541cec1eb26f15ef258fbea6fa17118b4e5f74fe2a428b8692aea68827"
+      },
+      {
+        "role": "vocoder.32",
+        "path": "vocoder/32.dsv35",
+        "content_utf8": "v32",
+        "size": 3,
+        "sha256": "60f840ebe562aefdfb0411ae1533bc14e12cf34de60dc27ef118898863a54e7f"
+      }
+    ],
+    "fingerprint": "a7b8f7f9d16f4c0ad06dd4176f6677b0a487a8f2a3561700315f0f78ba02bc79"
+  }
+}

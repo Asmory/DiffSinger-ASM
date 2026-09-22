@@ -10,6 +10,7 @@ deterministic synthetic parity gates locally:
 make -j"$(nproc)" engine-check
 make -j"$(nproc)" test
 make -j"$(nproc)" m35-check m38-check m58-check
+make model-tool-check
 ```
 
 RTF promotion must run on the fingerprinted target machine because hosted CPU
@@ -49,4 +50,8 @@ config/best-inference.env
 README.md
 docs/ENGINE_ABI.md
 docs/PERFORMANCE.md
+docs/OPENUTAU_OFFLINE_MODEL_PROTOCOL.md
+bin/dsasm-model-tool
+share/dsasm-model-tool/app/...
+share/dsasm-model-tool/python/...
 ```

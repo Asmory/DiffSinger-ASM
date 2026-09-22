@@ -31,10 +31,9 @@ phrase WAV.
 
 > [!IMPORTANT]
 > This remains an experimental, CPU-specific runtime, not a standalone singing
-> editor. OpenUtau integration is available in
-> [`AntheaLaffy/OpenUtau` at `f5efea82`](https://github.com/AntheaLaffy/OpenUtau/commit/f5efea82),
-> but it is not part of an upstream OpenUtau release. Bring your own compatible
-> exported voicebank and prepare its native bundles before playback.
+> editor. The v0.2 provider package contains the native ABI and offline model
+> tool required by the matching OpenUtau integration, but it is not part of an
+> upstream OpenUtau release. Bring your own compatible exported voicebank.
 
 ## Current CPU Performance
 
@@ -126,15 +125,15 @@ Check the relevant CPU features before enabling the release profile:
 grep -m1 -oE 'avx2|fma|avx_vnni' /proc/cpuinfo | sort -u
 ```
 
-### Offline model packing
+### Building the offline model tool
 
-- Python 3.10+
-- NumPy
-- ONNX
-- ONNX Runtime (CPU)
+- `uv` and a managed CPython 3.12 runtime
+- Network access for the first package build; pinned downloads are cached under
+  `build/package-cache`
 
-PyTorch is only needed by checkpoint importers and validation tools. It is not
-needed to run an already packed model.
+The release package embeds CPython 3.12 and all locked dependencies, so product
+users do not install Python, NumPy, ONNX, or ONNX Runtime separately. PyTorch is
+only needed by development checkpoint importers and parity tools.
 
 ## Quick Start
 
@@ -150,6 +149,47 @@ This produces `build/libdsasm.so`. The opaque engine keeps models, one shared
 worker pool, and inference buffers resident, then publishes vocoder output as
 contiguous PCM callbacks. See [the engine ABI and frame-bucket contract](docs/ENGINE_ABI.md).
 
+Build the self-contained provider package:
+
+```bash
+make -j"$(nproc)" package VERSION=v0.2.0
+```
+
+The archive under `release/` contains `lib/libdsasm.so` and the independently
+callable `bin/dsasm-model-tool`. Its embedded Python dependencies are exact and
+hash-locked.
+
+### Offline model preparation
+
+Inspect, plan, convert into caller-owned staging, and validate without loading
+the native runtime:
+
+```bash
+package=/absolute/path/to/diffsinger-asm-v0.2.0-linux-x86_64
+singer=/absolute/path/to/singer
+
+"$package/bin/dsasm-model-tool" inspect \
+  --protocol 1 --singer-root "$singer" --json
+"$package/bin/dsasm-model-tool" plan \
+  --protocol 1 --singer-root "$singer" --json
+"$package/bin/dsasm-model-tool" convert \
+  --protocol 1 --singer-root "$singer" \
+  --expected-source-fingerprint SHA256_FROM_PLAN \
+  --staging /path/on/singer/filesystem/staging \
+  --work /path/to/reusable/work --jsonl
+"$package/bin/dsasm-model-tool" validate \
+  --protocol 1 --bundle /path/on/singer/filesystem/staging --json
+```
+
+Conversion always produces the 32- and 384-frame product buckets and writes
+`bundle.json` last. The tool never publishes `current.json`; OpenUtau owns the
+atomic generation commit.
+
+The direct packer commands below are retained for development and standalone
+debugging. Product integrations should use `dsasm-model-tool` so compatibility,
+fingerprints, estimates, reason codes, and validation stay on one versioned
+boundary.
+
 The standalone acoustic and vocoder executables remain available for model
 inspection, parity checks, and debugging:
 
@@ -157,7 +197,7 @@ inspection, parity checks, and debugging:
 make -j"$(nproc)" build/dsasm-acoustic build/dsasm-vocoder-m40
 ```
 
-Create an environment for offline packing:
+Create a development environment for direct packer use:
 
 ```bash
 python -m venv .venv
@@ -175,12 +215,12 @@ python tools/pack_acoustic_onnx_m25.py /path/to/voicebank/acoustic.onnx \
 build/dsasm-acoustic inspect /path/to/singer/dsasm/acoustic
 ```
 
-Compile the streaming vocoder buckets. The filenames are part of the engine
+Compile the two product vocoder buckets. The filenames are part of the engine
 contract; each graph remains fixed-shape internally:
 
 ```bash
 mkdir -p /path/to/singer/dsasm/vocoder
-for frames in 64 128 256 384; do
+for frames in 32 384; do
   python tools/pack_vocoder_graph_m35.py \
     /path/to/voicebank/dsvocoder/nsf_hifigan.onnx \
     --frames "$frames" \
@@ -194,45 +234,35 @@ done
 ### OpenUtau
 
 Build or install the OpenUtau integration referenced above, then point it at
-this DiffSinger-ASM checkout. The promoted inference profile is built into the
-runtime defaults, so OpenUtau does not need tuning environment variables:
+the extracted provider package's `lib/libdsasm.so`. OpenUtau discovers
+`bin/dsasm-model-tool` from the same package root. A source checkout may still
+be used for development through `DIFFSINGER_ASM_HOME` and the explicit
+`OPENUTAU_DSASM_MODEL_TOOL` override.
 
-```bash
-cd /absolute/path/to/DiffSinger-ASM
-export DIFFSINGER_ASM_HOME=/absolute/path/to/DiffSinger-ASM
-# Launch OpenUtau from this environment.
-```
-
-By default, each singer uses these prepared directories:
+Published singers use an immutable generation selected by one pointer:
 
 ```text
-<singer>/dsasm/acoustic
-<singer>/dsasm/vocoder
+<singer>/dsasm/current.json
+<singer>/dsasm/generations/<generation>/bundle.json
+<singer>/dsasm/generations/<generation>/acoustic/...
+<singer>/dsasm/generations/<generation>/vocoder/32.dsv35
+<singer>/dsasm/generations/<generation>/vocoder/384.dsv35
 ```
 
-They can instead be configured in the singer's `dsconfig.yaml`:
+Projects use the fixed renderer IDs `DIFFSINGER` for ONNX and
+`DIFFSINGER-ASM` for this provider. Selecting ASM reports incompatibility or
+runtime unavailability instead of silently changing backend. Switching to ASM
+may inspect compatibility silently, but conversion remains an explicit user
+action.
 
-```yaml
-asm_acoustic: /absolute/path/to/packed/acoustic
-asm_vocoder: /absolute/path/to/packed/vocoder
-```
-
-In OpenUtau, select **Preferences -> Rendering -> DiffSinger backend**, then
-choose **Auto**, **ASM**, or **ONNX Runtime**. `Auto` uses ASM only when the OS,
-CPU features, ABI version, packed model, sample rate, hop size, mel bins, and
-model features are compatible; otherwise it falls back to ONNX Runtime.
-Selecting `ASM` explicitly reports the incompatibility instead of silently
-falling back.
-
-ABI v1 rejects configurations it cannot reproduce, including energy
+ABI v3 rejects configurations it cannot reproduce, including energy
 conditioning and pitch-controllable vocoders. ASM and ONNX renders use separate
 WAV cache keys. Partial PCM is published only to the active playback session;
 it enters the complete render cache only after the unique final chunk arrives.
 
-The native engine validates contiguous callback offsets and streams a short
-first bucket before switching to larger throughput-oriented buckets. OpenUtau
-keeps ungenerated regions pending, so the audio callback reads immutable
-published chunks without treating missing audio as a completed phrase.
+The native engine exposes separate four-worker/32-frame real-time and
+eight-worker/384-frame batch modes. OpenUtau chooses the mode from whether the
+render is consumed progressively during playback or as a complete block.
 
 For standalone CLI debugging, text vector files accept whitespace- or
 comma-separated values; F0 and optional variance curves contain one value per
@@ -273,11 +303,11 @@ also headerless float32 arrays.
 
 ## Best Inference Profile
 
-The runtime dispatches fixed-shape streaming and batch kernels independently.
-Its defaults enable only choices that passed the corresponding end-to-end gate.
-[`config/best-inference.env`](config/best-inference.env) records those values
-explicitly for reproducible benchmarking and lets deployments override or
-disable individual optimizations.
+ABI v3 mode configuration records the worker, region, bucket, and overlap
+values that passed each architecture's current end-to-end gate. Runtime
+defaults select the corresponding shape-gated graph and kernel paths.
+[`config/best-inference.env`](config/best-inference.env) preserves the common
+environment controls used for benchmark reproduction.
 
 ```bash
 . config/best-inference.env
@@ -295,9 +325,10 @@ run the real-model streaming test when local packed artifacts are available:
 
 ```bash
 make -j"$(nproc)" engine-check
+make model-tool-check
 make engine-real-stream-check \
   ENGINE_REAL_ACOUSTIC=/path/to/packed/acoustic \
-  ENGINE_REAL_VOCODER=/path/to/packed/vocoder/384.dsv35
+  ENGINE_REAL_VOCODER=/path/to/packed/vocoder
 ```
 
 Run the core native regression checks:
@@ -316,19 +347,17 @@ The full real-voicebank E2E comparison needs locally prepared model and fixture
 artifacts and is documented in [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 Voicebanks and singer embeddings are intentionally not distributed here.
 
-The native ABI v2 keeps the 192-byte `dsasm_request` layout and adds explicit
-fixed vocoder-bucket selection. A request using zero selects the smallest
-loaded bucket; a nonzero unavailable bucket is rejected instead of silently
-expanding the render and delaying its next PCM callback. The external OpenUtau
-binding must require ABI version 2 and map the former trailing reserved field
-to `vocoder_bucket_frames`.
+The native ABI v3 exposes explicit real-time streaming and block batch modes.
+Mode configuration is queryable, and mode engines reject mismatched request
+modes, buckets, or overlap values. See the
+[OpenUtau binding contract](docs/ENGINE_ABI.md#openutau-contract).
 
 ## Architecture
 
 ```text
 Exported voicebank (offline)
   acoustic.onnx ----> DSFS25 + DSAUX20 + DSLYNX7
-  nsf_hifigan.onnx -> 64 / 128 / 256 / 384-frame DSVOC35 buckets
+  nsf_hifigan.onnx -> 32 / 384-frame DSVOC35 buckets
 
 Native inference (online)
   OpenUtau score + curves -> stable C ABI -> persistent singer engine
@@ -350,6 +379,9 @@ stable product boundary; lower-level headers remain implementation-oriented.
 - [Block batch performance policy](docs/BATCH_PERFORMANCE.md)
 - [CPU runtime implementation policy](docs/RUNTIME_IMPLEMENTATION_POLICY.md)
 - [Stable engine ABI and streaming contract](docs/ENGINE_ABI.md)
+- [Offline model protocol](docs/OPENUTAU_OFFLINE_MODEL_PROTOCOL.md)
+- [OpenUtau supply contract draft](docs/OPENUTAU_SUPPLY_CONTRACT_DRAFT.md)
+- [v0.2.0 release notes](docs/RELEASE_NOTES_V0.2.0.md)
 - [Manual validation and release process](docs/RELEASING.md)
 - [Deployment ONNX import](docs/M25_ONNX_DEPLOYMENT.md)
 - [Real-model acceptance](docs/M25_REAL_MODEL_ACCEPTANCE.md)

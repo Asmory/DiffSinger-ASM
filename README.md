@@ -152,7 +152,7 @@ contiguous PCM callbacks. See [the engine ABI and frame-bucket contract](docs/EN
 Build the self-contained provider package:
 
 ```bash
-make -j"$(nproc)" package VERSION=v0.2.0
+make -j"$(nproc)" package VERSION=v0.2.1
 ```
 
 The archive under `release/` contains `lib/libdsasm.so` and the independently
@@ -165,7 +165,7 @@ Inspect, plan, convert into caller-owned staging, and validate without loading
 the native runtime:
 
 ```bash
-package=/absolute/path/to/diffsinger-asm-v0.2.0-linux-x86_64
+package=/absolute/path/to/diffsinger-asm-v0.2.1-linux-x86_64
 singer=/absolute/path/to/singer
 
 "$package/bin/dsasm-model-tool" inspect \
@@ -182,8 +182,10 @@ singer=/absolute/path/to/singer
 ```
 
 Conversion always produces the 32- and 384-frame product buckets and writes
-`bundle.json` last. The tool never publishes `current.json`; OpenUtau owns the
-atomic generation commit.
+`bundle.json` only after offline validation succeeds. Staging must be empty and
+must not overlap the reusable work directory. SIGINT cancels and reaps the
+active packer process group before the tool returns. The tool never publishes
+`current.json`; OpenUtau owns the atomic generation commit.
 
 The direct packer commands below are retained for development and standalone
 debugging. Product integrations should use `dsasm-model-tool` so compatibility,
@@ -381,7 +383,7 @@ stable product boundary; lower-level headers remain implementation-oriented.
 - [Stable engine ABI and streaming contract](docs/ENGINE_ABI.md)
 - [Offline model protocol](docs/OPENUTAU_OFFLINE_MODEL_PROTOCOL.md)
 - [OpenUtau supply contract draft](docs/OPENUTAU_SUPPLY_CONTRACT_DRAFT.md)
-- [v0.2.0 release notes](docs/RELEASE_NOTES_V0.2.0.md)
+- [v0.2.1 release notes](docs/RELEASE_NOTES_V0.2.1.md)
 - [Manual validation and release process](docs/RELEASING.md)
 - [Deployment ONNX import](docs/M25_ONNX_DEPLOYMENT.md)
 - [Real-model acceptance](docs/M25_REAL_MODEL_ACCEPTANCE.md)

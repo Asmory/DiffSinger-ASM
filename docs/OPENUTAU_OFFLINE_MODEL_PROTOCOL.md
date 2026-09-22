@@ -204,13 +204,16 @@ localized conversion message.
 ## 6. Convert
 
 `convert` writes only below caller-provided `--staging` and `--work` paths. The
-staging path MUST be absent or empty. The tool MUST NOT read or modify an
-OpenUtau `current.json`, an existing committed generation, or PCM cache.
+staging path MUST be absent or empty. Staging and work MUST be directories and
+MUST NOT be equal, ancestors, or descendants of one another. The work directory
+may be retained and reused between attempts. Invalid path relationships return
+`request.invalid`. The tool MUST NOT read or modify an OpenUtau `current.json`,
+an existing committed generation, or PCM cache.
 
 The provider MUST generate both product vocoder buckets, 32 and 384 frames.
 `bundle.json` is written at the `--staging` root last, only after all artifacts
-have been packed
-and offline validation has succeeded. Its presence therefore marks a complete
+have been packed and the in-memory candidate manifest has passed the same
+offline validation used by `validate`. Its presence therefore marks a complete
 staging result, but publication still belongs to OpenUtau.
 
 Before writing work, `convert` MUST recompute the source fingerprint and compare
@@ -223,11 +226,14 @@ plan and rechecks the current source closure before replacing `current.json`.
 On failure or cancellation the tool MUST NOT leave a valid `bundle.json` in
 staging. OpenUtau owns deletion of staging and work paths after the process
 returns. The tool MUST handle SIGINT as a cancellation request and SHOULD emit a
-cancelled result promptly at a stage boundary. OpenUtau waits 5 seconds after
-SIGINT and then terminates the entire process tree. Forced termination, EOF
-without a final result, or an exit/result mismatch is a tool failure; OpenUtau
-synthesizes `tool.cancel_timeout` or `tool.result_missing` for diagnostics and
-never publishes the staging directory.
+cancelled result promptly at a stage boundary. The packaged provider starts
+each packer in an isolated process group. On SIGINT it forwards SIGINT to that
+group, waits up to 2 seconds, sends SIGKILL if needed, and reaps it before the
+final cancelled result. OpenUtau waits 5 seconds after SIGINT and then
+terminates the entire process tree. Forced termination, EOF without a final
+result, or an exit/result mismatch is a tool failure; OpenUtau synthesizes
+`tool.cancel_timeout` or `tool.result_missing` for diagnostics and never
+publishes the staging directory.
 
 ## 7. Convert Events
 
@@ -263,7 +269,8 @@ affinity, or worker gates. It validates:
 - packed headers and format versions;
 - audio dimensions and cross-file dimensions;
 - manifest paths, sizes, and SHA-256 digests;
-- source, converter, packer, ISA, and bundle identity fields;
+- nonempty provider build identity and source, converter, packer, ISA, and
+  bundle identity fields;
 - the recomputed authoritative bundle fingerprint.
 
 On success it returns `bundle_state: "ready"`, the source fingerprint, and the

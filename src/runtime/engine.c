@@ -163,7 +163,7 @@ int dsasm_engine_mode_config(dsasm_engine_mode mode, dsasm_mode_config *config){
     config->vocoder_bucket_frames=mode==DSASM_MODE_REALTIME_STREAMING?32u:384u;
     config->overlap_frames=mode==DSASM_MODE_REALTIME_STREAMING?8u:0u;
     config->profile_revision=2u;
-    config->output_compatibility_revision=mode==DSASM_MODE_BLOCK_BATCH?1u:0u;
+    config->output_compatibility_revision=1u;
     return DSASM_OK;
 }
 int dsasm_engine_is_supported(char *reason,size_t reason_size){

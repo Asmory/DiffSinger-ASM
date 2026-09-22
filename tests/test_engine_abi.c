@@ -23,7 +23,7 @@ int main(int argc, char **argv) {
             realtime.workers != 4 || realtime.region_frames != 32 ||
             realtime.vocoder_bucket_frames != 32 || realtime.overlap_frames != 8 ||
             realtime.profile_revision != 2 ||
-            realtime.output_compatibility_revision != 0) return 10;
+            realtime.output_compatibility_revision != 1) return 10;
     if (dsasm_engine_mode_config(DSASM_MODE_BLOCK_BATCH, &batch) != DSASM_OK ||
             batch.mode != DSASM_MODE_BLOCK_BATCH || batch.workers != 8 ||
             batch.region_frames != 384 || batch.vocoder_bucket_frames != 384 ||

@@ -33,8 +33,8 @@ typedef struct dsasm_mode_config {
     uint32_t overlap_frames;
     /* Incremented when a mode's promoted defaults change. */
     uint32_t profile_revision;
-    /* Zero forbids canonical PCM cache commit. Equal nonzero values declare
-       product-level cross-mode output compatibility. */
+    /* Cache protocol revision, not a quality grade. Zero forbids canonical
+       PCM commit; equal nonzero values permit logical cross-mode reuse. */
     uint32_t output_compatibility_revision;
 } dsasm_mode_config;
 

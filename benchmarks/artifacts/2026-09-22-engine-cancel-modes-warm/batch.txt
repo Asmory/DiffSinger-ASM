@@ -1,0 +1,26 @@
+CANCEL_SAMPLE mode=2 index=0 latency_ms=1882.523 rc=-6
+CANCEL_SAMPLE mode=2 index=1 latency_ms=1729.588 rc=-6
+CANCEL_SAMPLE mode=2 index=2 latency_ms=1560.143 rc=-6
+CANCEL_SAMPLE mode=2 index=3 latency_ms=1578.493 rc=-6
+CANCEL_SAMPLE mode=2 index=4 latency_ms=1490.213 rc=-6
+CANCEL_SAMPLE mode=2 index=5 latency_ms=1578.114 rc=-6
+CANCEL_SAMPLE mode=2 index=6 latency_ms=1496.983 rc=-6
+CANCEL_SAMPLE mode=2 index=7 latency_ms=1514.215 rc=-6
+CANCEL_SAMPLE mode=2 index=8 latency_ms=1422.908 rc=-6
+CANCEL_SAMPLE mode=2 index=9 latency_ms=1518.851 rc=-6
+CANCEL_SAMPLE mode=2 index=10 latency_ms=1494.680 rc=-6
+CANCEL_SAMPLE mode=2 index=11 latency_ms=1510.775 rc=-6
+CANCEL_SAMPLE mode=2 index=12 latency_ms=1410.769 rc=-6
+CANCEL_SAMPLE mode=2 index=13 latency_ms=1448.808 rc=-6
+CANCEL_SAMPLE mode=2 index=14 latency_ms=1338.630 rc=-6
+CANCEL_SAMPLE mode=2 index=15 latency_ms=1507.084 rc=-6
+CANCEL_SAMPLE mode=2 index=16 latency_ms=1496.973 rc=-6
+CANCEL_SAMPLE mode=2 index=17 latency_ms=1572.198 rc=-6
+CANCEL_SAMPLE mode=2 index=18 latency_ms=1443.215 rc=-6
+CANCEL_SAMPLE mode=2 index=19 latency_ms=1437.387 rc=-6
+CANCEL_SAMPLE mode=2 index=20 latency_ms=1369.439 rc=-6
+CANCEL_SAMPLE mode=2 index=21 latency_ms=1421.690 rc=-6
+CANCEL_SAMPLE mode=2 index=22 latency_ms=1398.154 rc=-6
+CANCEL_SAMPLE mode=2 index=23 latency_ms=1399.078 rc=-6
+CANCEL_SAMPLE mode=2 index=24 latency_ms=1369.439 rc=-6
+CANCEL_FINAL mode=2 workers=8 region_frames=384 bucket=384 samples=25 warmup=3 delay_ms=10.000 p50_ms=1494.680 p90_ms=1578.341 p99_ms=1845.819 worst_ms=1882.523 gate_ms=371.520 pass=FAIL

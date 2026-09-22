@@ -31,10 +31,11 @@ Formal baseline and promotion runs must supply the golden waveform generated
 offline from the exact acoustic request used by the benchmark. A finite-only
 run is diagnostic and cannot establish or replace the batch champion.
 
-The explicit ABI v2 bucket field is the scheduling boundary: real-time requests
-select a measured small bucket, while batch requests select 384. The engine
-does not change modes or bucket sizes implicitly. Streaming and batch releases
-have independent best-known baselines, tags, evidence, and archives.
+The explicit ABI v3 mode and bucket fields are the scheduling boundary:
+real-time requests select the measured small profile, while batch requests
+select the 384-frame profile. The engine does not change modes or bucket sizes
+implicitly. Streaming and batch releases have independent best-known
+baselines, tags, evidence, and archives.
 
 When E2E fails, subsystem results may guide the next edit only after their
 weights are measured in the parent E2E profile. If the weighted model predicts

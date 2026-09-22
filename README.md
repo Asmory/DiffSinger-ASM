@@ -1,6 +1,6 @@
 # DiffSinger-ASM
 
-**Real-time DiffSinger synthesis on a laptop CPU. No GPU required.**
+**Streaming and high-throughput DiffSinger synthesis on a laptop CPU. No GPU required.**
 
 [![Platform](https://img.shields.io/badge/platform-Linux%20x86--64-1793d1)](https://github.com/Asmory/DiffSinger-ASM)
 [![Runtime](https://img.shields.io/badge/runtime-C%20%2B%20x86--64%20ASM-555555)](https://github.com/Asmory/DiffSinger-ASM)
@@ -9,9 +9,14 @@
 [![Paper](https://img.shields.io/badge/arXiv-2105.02446-b31b1b)](https://arxiv.org/abs/2105.02446)
 
 DiffSinger-ASM runs the complete acoustic-to-waveform pipeline in C and
-handwritten x86-64 assembly. On an Intel Core i5-13420H, it synthesizes a
-4.458-second phrase in a median **3.992 seconds**: an end-to-end real-time factor
-of **0.895**, entirely on the CPU.
+handwritten x86-64 assembly. It keeps separate execution and performance
+contracts for low-latency streaming and large-block batch rendering because a
+single long-audio RTF cannot describe both workloads honestly.
+
+On an Intel Core i5-13420H, the current 32-frame streaming profile keeps every
+measured region below RTF 1 with zero deadline misses. The independent
+384-frame batch profile renders 31.208 seconds of audio in a median 22.031
+seconds, an aggregate RTF of **0.706**, entirely on the CPU.
 
 Exported DiffSinger acoustic and NSF-HiFiGAN ONNX models are compiled offline
 into memory-mapped native bundles. ONNX Runtime helps pack and validate a
@@ -31,30 +36,44 @@ phrase WAV.
 > but it is not part of an upstream OpenUtau release. Bring your own compatible
 > exported voicebank and prepare its native bundles before playback.
 
-## CPU Real-Time Performance
+## Current CPU Performance
 
-The promoted `e2e-cin64-asym-pass-20260921` profile passed ten persistent,
-end-to-end requests. Every request finished faster than the audio it generated.
+Streaming and batch results are separate champions. Streaming is gated by its
+slowest region and occupied CPU capacity; batch rendering is gated by median
+complete E2E wall time. Neither result is promoted by comparing it with the
+other architecture.
 
-| Measured result | Current release |
+| Contract | Current champion |
 | --- | ---: |
-| Generated audio | 4458.231 ms |
-| Median synthesis latency | **3991.507 ms** |
-| Median real-time factor | **0.895** |
-| p90 / worst latency | 4120.739 / 4136.881 ms |
-| Requests below real time | **10 / 10** |
-| Waveform quality | cosine 0.999016, SNR 27.06 dB |
+| Streaming workload | 32 frames, 25 measured regions after 10 warm-ups |
+| Streaming worst region RTF | **0.996841** maximum across three runs |
+| Streaming CPU-RTF | **2.391249** maximum across three runs |
+| Streaming deadlines | **0 misses in every run** |
+| Streaming waveform quality | cosine 0.999292, SNR 28.49 dB |
+| Batch workload | 7 x 384-frame regions after 2 warm-ups |
+| Batch generated audio | 31207.619 ms |
+| Batch median E2E latency | **22031.032 ms** |
+| Batch median aggregate RTF | **0.705950** |
+| Batch p90 / worst latency | 24730.666 / 25563.829 ms |
+| Batch waveform quality | cosine 0.999033, SNR 27.13 dB |
 
-Measured on an Intel Core i5-13420H with eight P-core/SMT workers, a 384-frame
-fixture, four Rectified-Flow steps, persistent warm requests, and performance
-power mode. See [the full performance record](docs/PERFORMANCE.md) and
-[raw samples](benchmarks/artifacts/2026-09-21-e2e-cin64-asym/samples.tsv).
-Results on other CPUs and voicebanks will vary.
+Both profiles were measured on an Intel Core i5-13420H at PL1 45 W with the
+performance platform and EPP policies. Streaming uses four workers to reduce
+per-track CPU load; batch uses eight P-core/SMT workers for throughput. The
+batch champion improved its paired control by **8.02%** while improving p90 and
+worst latency.
+
+See the [streaming policy and evidence](docs/STREAMING_PERFORMANCE.md), the
+[batch policy and evidence](docs/BATCH_PERFORMANCE.md), and the tracked
+[batch raw samples](benchmarks/artifacts/2026-09-22-batch384-k11-convt-oc2-45w/samples.tsv).
+Historical M55/M58 long-audio results remain in
+[the performance record](docs/PERFORMANCE.md), but are not current streaming or
+fixed-block champions. Results on other CPUs and voicebanks will vary.
 
 ## Why Native Assembly?
 
-- **CPU real time is the release target.** FastSpeech2, the auxiliary decoder,
-  Rectified Flow, and NSF-HiFiGAN are timed together, not as isolated kernels.
+- **Each product mode has its own target.** Streaming protects deadlines and
+  CPU capacity; batch rendering maximizes complete E2E throughput.
 - **The hot path stays small.** Runtime dependencies are only libc, libm, and
   pthread, with no framework startup, graph planner, or provider dispatch.
 - **Kernels match deployed shapes.** Handwritten AVX2/FMA code handles FP32
@@ -254,8 +273,8 @@ also headerless float32 arrays.
 
 ## Best Inference Profile
 
-The runtime defaults enable the exact graph, scheduling, residual-fusion, and
-asymmetric VNNI choices that passed the current end-to-end gate.
+The runtime dispatches fixed-shape streaming and batch kernels independently.
+Its defaults enable only choices that passed the corresponding end-to-end gate.
 [`config/best-inference.env`](config/best-inference.env) records those values
 explicitly for reproducible benchmarking and lets deployments override or
 disable individual optimizations.
@@ -348,6 +367,8 @@ DiffSinger-ASM is an active performance-engineering project from Asmory. The
 supported surface is intentionally narrow: Linux, x86-64, and exported
 DiffSinger graphs compatible with the included importers. Model compatibility,
 quality, and speed should be validated on your own workload before deployment.
+Validation and releases are run locally; the repository intentionally has no
+hosted CI or continuous deployment workflow.
 
 No voicebank, singer identity, or third-party model weights are included in the
 repository or release archives.

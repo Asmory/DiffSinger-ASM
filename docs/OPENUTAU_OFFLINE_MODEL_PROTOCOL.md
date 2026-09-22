@@ -531,9 +531,10 @@ Protocol version 1 acceptance requires:
 - recovery from orphan staging and an interrupted pre-commit conversion.
 
 Schema version 1 remains an implementation draft until both repositories pass
-these tests. Realtime canonical compatibility and long-phrase cancellation are
-separate release gates and do not block implementation of this offline
-protocol.
+these tests. Long-phrase cancellation is a separate release gate and does not
+block implementation of this offline protocol. ABI v3 product modes both use
+output compatibility revision 1, allowing complete canonical PCM to be reused
+across real-time playback and block pre-rendering.
 
 The normative aggregate fingerprint vector is stored at
 `tests/fixtures/model_protocol_v1_fingerprints.json` in the provider repository.

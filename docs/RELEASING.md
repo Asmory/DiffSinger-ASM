@@ -25,14 +25,14 @@ the performance policy in `docs/PERFORMANCE.md`.
 4. Create and push an annotated `v*` tag and publish the archive manually.
 
 ```sh
-git tag -a v0.2.1 -m "DiffSinger-ASM v0.2.1"
-git push origin v0.2.1
+git tag -a v0.2.2 -m "DiffSinger-ASM v0.2.2"
+git push origin v0.2.2
 ```
 
 Create the archive locally with:
 
 ```sh
-make package VERSION=v0.2.1
+make package VERSION=v0.2.2
 ```
 
 Release builders that need a portable binary must pass an explicit AVX2/FMA

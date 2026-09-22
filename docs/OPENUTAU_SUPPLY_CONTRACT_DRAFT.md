@@ -114,13 +114,17 @@ configuration.
 layout. Revision 2 adds the cancellation boundaries in section 8. It does not
 change successful PCM output.
 
-`output_compatibility_revision` identifies a canonical PCM quality class:
+`output_compatibility_revision` identifies a canonical PCM cache protocol, not
+a quality grade:
 
 - zero means session-only output and forbids canonical commit;
 - equal nonzero values permit logical cache reuse without claiming bit identity;
 - unequal values forbid cross-mode reuse.
 
-The current realtime value remains zero. The current batch value is one.
+Both current product modes use revision one. A complete batch pre-render may
+therefore satisfy later playback, and a complete realtime render may satisfy
+later pre-render, mixdown, or export. The modes remain distinct execution and
+performance profiles even though their complete PCM is logically reusable.
 
 ## 5. Mode selection and engine lifetime
 
@@ -373,7 +377,7 @@ Current behavior is:
 | Completed source | Later playback | Later pre-render/export |
 | --- | --- | --- |
 | Batch revision 1 | reuse | reuse |
-| Realtime revision 0 | rerender after active session | rerender |
+| Realtime revision 1 | reuse | reuse |
 
 The native runtime does not read, write, publish, or replace canonical WAV
 files. OpenUtau owns memory cache, disk cache, staging files, commit manifests,
@@ -476,7 +480,7 @@ Consumer acceptance requires:
 - mode-config query tests without duplicated profile constants;
 - separate mode-engine lifecycle and one-lane scheduling tests;
 - request mode, bucket, and overlap propagation tests;
-- revision-zero canonical exclusion and compatible cache lookup tests;
+- revision-zero canonical exclusion and cross-mode compatible cache lookup tests;
 - cancellation, callback ownership, generation, and atomic replacement tests;
 - converter completeness tests for both product buckets.
 
@@ -523,27 +527,21 @@ batch operation does not change existing track backend selections.
 This provider draft does not become a formal or archived contract until both
 sides resolve and record the following:
 
-1. **Realtime canonical compatibility.** Realtime remains revision zero. A
-   completed realtime render therefore does not satisfy later playback,
-   pre-render, mixdown, or export. Promotion needs an agreed real-song corpus,
-   perceptual and numerical thresholds, archived cross-mode evidence, and a
-   shared nonzero compatibility revision. The existing single 384-frame
-   comparison is insufficient.
-2. **Long-phrase cancellation scope.** The current `371.52 ms` offer covers
+1. **Long-phrase cancellation scope.** The current `371.52 ms` offer covers
    only exact fixed-region reference strata. The parties must decide whether
    formal acceptance requires a representative complete-phrase length sweep,
    a maximum native request length, or quality-approved exact-region
    segmentation.
-3. **Target-device enablement.** The parties must decide how OpenUtau records
+2. **Target-device enablement.** The parties must decide how OpenUtau records
    or verifies that a target device belongs to a passing cancellation stratum
    before it enables active batch preemption.
-4. **Offline protocol consumer acceptance.** The provider tool, shared
+3. **Offline protocol consumer acceptance.** The provider tool, shared
    fingerprint vectors, real-singer conversion, cancellation, staging mode
    creation, and package smoke gates pass. OpenUtau integration must consume
    the same vectors and pass its process supervision, source rehash,
    publication, recovery, and cache invalidation gates before protocol v1 is
    moved to its immutable contract path.
-5. **Consumer gates.** OpenUtau must finish its implementation review, build,
+4. **Consumer gates.** OpenUtau must finish its implementation review, build,
    and managed tests against the final proposed ABI library.
 
 Until these items are accepted in matching documents, this file remains a

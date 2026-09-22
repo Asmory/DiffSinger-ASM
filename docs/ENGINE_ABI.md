@@ -8,15 +8,17 @@ execution modes backed by independently promoted performance profiles:
 
 | Mode | Workers | Measured region | Bucket | Overlap | Profile | Output compatibility |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `DSASM_MODE_REALTIME_STREAMING` | 4 | 32 | 32 | 8 | 2 | 0 (session only) |
+| `DSASM_MODE_REALTIME_STREAMING` | 4 | 32 | 32 | 8 | 2 | 1 (canonical) |
 | `DSASM_MODE_BLOCK_BATCH` | 8 | 384 | 384 | 0 | 2 | 1 (canonical) |
 
 The values are returned by `dsasm_engine_mode_config()`. Integrations must use
 the returned values instead of duplicating them. `profile_revision` identifies
-the promoted execution profile. An `output_compatibility_revision` of zero
-forbids canonical PCM cache commit; equal nonzero revisions declare that the
-complete outputs may share a product cache entry. The two modes remain separate
-performance strata.
+the promoted execution profile. `output_compatibility_revision` is a cache
+protocol revision, not a quality grade. A zero value forbids canonical PCM
+cache commit; equal nonzero revisions declare that complete outputs may share a
+product cache entry. Both product modes use revision 1, so a complete batch
+pre-render can satisfy later playback and a complete real-time render can
+satisfy later batch use. The two modes remain separate performance strata.
 
 ## Build and model layout
 
@@ -103,7 +105,8 @@ The OpenUtau binding must:
 
 1. Resolve `dsasm_engine_abi_version` first and require version 3.
 2. Query both mode configs. Retain mode and profile revision as provenance;
-   use a nonzero output compatibility revision in canonical WAV cache keys.
+   use the output compatibility revision in canonical WAV cache keys. Mode and
+   profile do not split entries whose nonzero compatibility revision matches.
 3. Lazily retain separate real-time and batch engines for each singer.
 4. Use real-time mode when PCM is consumed progressively during playback, and
    batch mode for ordinary complete rendering and pre-rendering.

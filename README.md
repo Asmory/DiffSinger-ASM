@@ -152,7 +152,7 @@ contiguous PCM callbacks. See [the engine ABI and frame-bucket contract](docs/EN
 Build the self-contained provider package:
 
 ```bash
-make -j"$(nproc)" package VERSION=v0.2.1
+make -j"$(nproc)" package VERSION=v0.2.2
 ```
 
 The archive under `release/` contains `lib/libdsasm.so` and the independently
@@ -165,7 +165,7 @@ Inspect, plan, convert into caller-owned staging, and validate without loading
 the native runtime:
 
 ```bash
-package=/absolute/path/to/diffsinger-asm-v0.2.1-linux-x86_64
+package=/absolute/path/to/diffsinger-asm-v0.2.2-linux-x86_64
 singer=/absolute/path/to/singer
 
 "$package/bin/dsasm-model-tool" inspect \
@@ -259,8 +259,11 @@ action.
 
 ABI v3 rejects configurations it cannot reproduce, including energy
 conditioning and pitch-controllable vocoders. ASM and ONNX renders use separate
-WAV cache keys. Partial PCM is published only to the active playback session;
-it enters the complete render cache only after the unique final chunk arrives.
+WAV cache keys. Both ASM modes declare output compatibility revision 1, so a
+complete pre-render can satisfy later playback and a completed real-time render
+can satisfy later batch use. Partial PCM is published only to the active
+playback session; it enters the complete render cache only after the unique
+final chunk arrives.
 
 The native engine exposes separate four-worker/32-frame real-time and
 eight-worker/384-frame batch modes. OpenUtau chooses the mode from whether the
@@ -383,6 +386,7 @@ stable product boundary; lower-level headers remain implementation-oriented.
 - [Stable engine ABI and streaming contract](docs/ENGINE_ABI.md)
 - [Offline model protocol](docs/OPENUTAU_OFFLINE_MODEL_PROTOCOL.md)
 - [OpenUtau supply contract draft](docs/OPENUTAU_SUPPLY_CONTRACT_DRAFT.md)
+- [v0.2.2 release notes](docs/RELEASE_NOTES_V0.2.2.md)
 - [v0.2.1 release notes](docs/RELEASE_NOTES_V0.2.1.md)
 - [Manual validation and release process](docs/RELEASING.md)
 - [Deployment ONNX import](docs/M25_ONNX_DEPLOYMENT.md)

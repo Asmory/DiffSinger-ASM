@@ -1,0 +1,16 @@
+28421585618		cpu_atom/cycles/	24955220	0.00		
+43375852836		cpu_core/cycles/	43193669216	99.00		
+22691106363		cpu_atom/instructions/	24955220	0.00		
+72353711194		cpu_core/instructions/	43193669216	99.00		
+3235350182		cpu_atom/branches/	24955220	0.00		
+1562219729		cpu_core/branches/	43193669216	99.00		
+16843503		cpu_atom/branch-misses/	24955220	0.00		
+7028928		cpu_core/branch-misses/	43193669216	99.00		
+2293395643		cpu_atom/cache-references/	24955220	0.00		
+985033123		cpu_core/cache-references/	43193669216	99.00		
+1625985331		cpu_atom/cache-misses/	24955220	0.00		
+224913743		cpu_core/cache-misses/	43193669216	99.00		
+43218.62	msec	task-clock	43218624436	100.00		
+11268		context-switches	43218624436	100.00		
+113		cpu-migrations	43218624436	100.00		
+37210		page-faults	43218624436	100.00		

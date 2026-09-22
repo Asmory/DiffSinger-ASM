@@ -1,0 +1,27 @@
+DSASM engine profile: acoustic=321.520 ms vocoder=1177.725 ms callback=0.838 ms other=1.396 ms total=1501.479 ms rc=0
+DSASM engine profile: acoustic=1469.047 ms vocoder=3190.900 ms callback=1.363 ms other=1.570 ms total=4662.880 ms rc=0
+DSASM engine profile: acoustic=1613.324 ms vocoder=2630.552 ms callback=2.635 ms other=2.319 ms total=4248.829 ms rc=0
+DSASM engine profile: acoustic=1423.493 ms vocoder=2446.353 ms callback=3.331 ms other=2.222 ms total=3875.399 ms rc=0
+DSASM engine profile: acoustic=1354.155 ms vocoder=2350.553 ms callback=1.980 ms other=2.207 ms total=3708.895 ms rc=0
+DSASM engine profile: acoustic=1254.591 ms vocoder=2358.679 ms callback=2.305 ms other=1.580 ms total=3617.156 ms rc=0
+DSASM engine profile: acoustic=1218.708 ms vocoder=2317.367 ms callback=1.831 ms other=1.784 ms total=3539.691 ms rc=0
+DSASM engine profile: acoustic=1208.653 ms vocoder=2264.397 ms callback=1.910 ms other=1.530 ms total=3476.490 ms rc=0
+DSASM engine profile: acoustic=1231.748 ms vocoder=2248.735 ms callback=2.299 ms other=1.547 ms total=3484.329 ms rc=0
+REGION index=0 latency_ms=4248.869
+REGION index=1 latency_ms=3875.447
+REGION index=2 latency_ms=3708.936
+REGION index=3 latency_ms=3617.200
+REGION index=4 latency_ms=3539.738
+REGION index=5 latency_ms=3476.528
+REGION index=6 latency_ms=3484.371
+CALLBACK index=0 region=0 samples=196608 interval_ms=4248.823 playable_ms=4458.231 lateness_ms=0.000
+CALLBACK index=1 region=1 samples=196608 interval_ms=3875.494 playable_ms=4458.231 lateness_ms=0.000
+CALLBACK index=2 region=2 samples=196608 interval_ms=3708.951 playable_ms=4458.231 lateness_ms=0.000
+CALLBACK index=3 region=3 samples=196608 interval_ms=3617.200 playable_ms=4458.231 lateness_ms=0.000
+CALLBACK index=4 region=4 samples=196608 interval_ms=3539.739 playable_ms=4458.231 lateness_ms=0.000
+CALLBACK index=5 region=5 samples=196608 interval_ms=3476.542 playable_ms=4458.231 lateness_ms=0.000
+CALLBACK index=6 region=6 samples=196608 interval_ms=3484.371 playable_ms=4458.231 lateness_ms=0.000
+QUALITY max_abs=0.461062461 rmse=0.0259578528 cosine=0.999043779 SNR=27.17 samples=1376256 pass=PASS
+REGION_STATS median_ms=3617.200 p90_ms=4024.816 worst_ms=4248.869 cv=0.0692
+CALLBACK_STATS median_ms=3617.200 p90_ms=4024.826 worst_ms=4248.823 cv=0.0692
+STREAM_FINAL frames=384 regions=7 bucket=384 callbacks=7 aggregate_ms=25951.171 cpu_ms=165891.468 audio_ms=31207.619 aggregate_RTF=0.831565 cpu_RTF=5.315736 average_cores=6.392 worst_RTF=0.953039 first_region_ms=4248.869 deadline_misses=0 max_lateness_ms=0.000 realtime_pass=PASS checksum=f37a7d47370ae886 finite=PASS quality_pass=PASS

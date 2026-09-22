@@ -5,7 +5,6 @@
 [![Platform](https://img.shields.io/badge/platform-Linux%20x86--64-1793d1)](https://github.com/Asmory/DiffSinger-ASM)
 [![Runtime](https://img.shields.io/badge/runtime-C%20%2B%20x86--64%20ASM-555555)](https://github.com/Asmory/DiffSinger-ASM)
 [![ISA](https://img.shields.io/badge/ISA-AVX2%20%7C%20FMA%20%7C%20AVX--VNNI-e34f26)](https://github.com/Asmory/DiffSinger-ASM)
-[![CI](https://github.com/Asmory/DiffSinger-ASM/actions/workflows/ci.yml/badge.svg)](https://github.com/Asmory/DiffSinger-ASM/actions/workflows/ci.yml)
 [![Upstream](https://img.shields.io/badge/upstream-OpenVPI%2FDiffSinger-2ea44f)](https://github.com/openvpi/DiffSinger)
 [![Paper](https://img.shields.io/badge/arXiv-2105.02446-b31b1b)](https://arxiv.org/abs/2105.02446)
 
@@ -267,8 +266,8 @@ env | grep '^DSASM_' | sort
 ```
 
 Do not use the promoted AVX-VNNI settings on a CPU without AVX-VNNI. Local
-source builds default to `-march=native`; CI release archives use an explicit
-AVX2/FMA baseline, while optional AVX-VNNI vocoder paths remain runtime-gated.
+source builds default to `-march=native`; optional AVX-VNNI vocoder paths
+remain runtime-gated.
 
 ## Verification
 
@@ -332,7 +331,7 @@ stable product boundary; lower-level headers remain implementation-oriented.
 - [Block batch performance policy](docs/BATCH_PERFORMANCE.md)
 - [CPU runtime implementation policy](docs/RUNTIME_IMPLEMENTATION_POLICY.md)
 - [Stable engine ABI and streaming contract](docs/ENGINE_ABI.md)
-- [CI and release process](docs/RELEASING.md)
+- [Manual validation and release process](docs/RELEASING.md)
 - [Deployment ONNX import](docs/M25_ONNX_DEPLOYMENT.md)
 - [Real-model acceptance](docs/M25_REAL_MODEL_ACCEPTANCE.md)
 - [Pure-native vocoder executor](docs/M35_FULL_NATIVE_VOCODER.md)

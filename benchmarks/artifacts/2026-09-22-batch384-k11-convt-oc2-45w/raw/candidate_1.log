@@ -1,0 +1,18 @@
+REGION index=0 latency_ms=3446.318
+REGION index=1 latency_ms=3364.574
+REGION index=2 latency_ms=3278.388
+REGION index=3 latency_ms=3263.021
+REGION index=4 latency_ms=3304.458
+REGION index=5 latency_ms=3334.242
+REGION index=6 latency_ms=3489.742
+CALLBACK index=0 region=0 samples=196608 interval_ms=3446.308 playable_ms=4458.231 lateness_ms=0.000
+CALLBACK index=1 region=1 samples=196608 interval_ms=3364.637 playable_ms=4458.231 lateness_ms=0.000
+CALLBACK index=2 region=2 samples=196608 interval_ms=3278.417 playable_ms=4458.231 lateness_ms=0.000
+CALLBACK index=3 region=3 samples=196608 interval_ms=3263.041 playable_ms=4458.231 lateness_ms=0.000
+CALLBACK index=4 region=4 samples=196608 interval_ms=3304.478 playable_ms=4458.231 lateness_ms=0.000
+CALLBACK index=5 region=5 samples=196608 interval_ms=3334.259 playable_ms=4458.231 lateness_ms=0.000
+CALLBACK index=6 region=6 samples=196608 interval_ms=3489.755 playable_ms=4458.231 lateness_ms=0.000
+QUALITY max_abs=0.456689924 rmse=0.0260889891 cosine=0.999033427 SNR=27.13 samples=1376256 pass=PASS
+REGION_STATS median_ms=3334.242 p90_ms=3463.688 worst_ms=3489.742 cv=0.0236
+CALLBACK_STATS median_ms=3334.259 p90_ms=3463.687 worst_ms=3489.755 cv=0.0236
+STREAM_FINAL frames=384 regions=7 bucket=384 callbacks=7 aggregate_ms=23480.922 cpu_ms=145578.790 audio_ms=31207.619 aggregate_RTF=0.752410 cpu_RTF=4.664848 average_cores=6.200 worst_RTF=0.782764 first_region_ms=3446.318 deadline_misses=0 max_lateness_ms=0.000 realtime_pass=PASS checksum=f80d7b008cfd6b97 finite=PASS quality_pass=PASS

@@ -19,6 +19,24 @@
       "samples": "benchmarks/artifacts/2026-09-22-realtime32-w4-cpu-load-45w/samples.tsv",
       "status": "verified"
     },
+    "batch384_45w": {
+      "name": "384-frame K11 VNNI plus paired ConvTranspose",
+      "architecture": "block-batch",
+      "context": "i5-13420h-pl1-45w-performance-w8",
+      "tag": "batch384-k11-convt-oc2-45w-20260922",
+      "predecessor": "batch384-default-control-45w-20260922",
+      "baseline_median_ms": 23797.849,
+      "candidate_median_ms": 22031.032,
+      "candidate_median_rtf": 0.705950,
+      "stable_improvement_percent": 8.02,
+      "candidate_p90_ms": 24730.666,
+      "candidate_worst_ms": 25563.829,
+      "candidate_cv": 0.070,
+      "quality_cosine": 0.999033427,
+      "quality_snr_db": 27.13,
+      "samples": "benchmarks/artifacts/2026-09-22-batch384-k11-convt-oc2-45w/samples.tsv",
+      "status": "verified"
+    },
     "e2e": {
       "name": "M58 all3711 plus asymmetric K7/K11 VNNI at Cin128/Cin64",
       "predecessor": "e2e-k117-asym-pass-20260921",

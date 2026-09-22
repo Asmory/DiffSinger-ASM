@@ -201,6 +201,19 @@ static void run_m_slice(const DSAsmJob *j,size_t id,size_t nthreads){
         return;
     }
     if(j->kind==DS_JOB_VOCODER_CONVTRANSPOSE){
+        const char *ct2=getenv("DSASM_CONVT_S2K4_OC2");
+        const int exact_batch384_shape=j->Q==24576u||j->Q==49152u||j->Q==98304u;
+        const int use_s2_oc2=(ct2?(strcmp(ct2,"0")&&strcmp(ct2,"off")):exact_batch384_shape) &&
+            j->P==4u && j->S==2u && j->R==1u && j->M==2u*j->Q && !(j->N&1u);
+        if(use_s2_oc2){
+            const size_t blocks=j->N/2u,b0=(blocks*id)/nthreads,b1=(blocks*(id+1))/nthreads;
+            for(size_t b=b0;b<b1;b++){
+                const size_t oc=2u*b;
+                ds_convtranspose1d_s2k4_oc2_f32_avx2(
+                    j->x,j->w+oc*j->K*j->P,j->b0+oc,j->y+oc*j->M,j->K,j->Q);
+            }
+            return;
+        }
         const size_t c0=(j->N*id)/nthreads, c1=(j->N*(id+1))/nthreads;
         for(size_t oc=c0;oc<c1;oc++){
             const float *woc=j->w+oc*j->K*j->P;

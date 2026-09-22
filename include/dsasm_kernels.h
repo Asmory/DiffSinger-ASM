@@ -123,6 +123,10 @@ void ds_convtranspose1d_s2k4_oc_f32_avx2(
     const float *x, const float *w_oc, float bias, float *y,
     size_t Cin, size_t Tin);
 
+void ds_convtranspose1d_s2k4_oc2_f32_avx2(
+    const float *x, const float *w_oc2, const float *bias2, float *y_oc2,
+    size_t Cin, size_t Tin);
+
 /* M42 specialized early HiFi-GAN upsampler: stride=8,K=16,pad=4. */
 void ds_convtranspose1d_s8k16_oc_f32_avx2(
     const float *x, const float *w_oc, float bias, float *y,

@@ -1,0 +1,11 @@
+# case	variant	aggregate_ms
+batch384	baseline	25817.030
+batch384	baseline	23797.849
+batch384	baseline	22486.852
+batch384	baseline	25262.101
+batch384	baseline	22703.494
+batch384	candidate	23480.922
+batch384	candidate	25563.829
+batch384	candidate	20962.742
+batch384	candidate	21919.385
+batch384	candidate	22031.032

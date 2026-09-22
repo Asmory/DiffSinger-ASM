@@ -1,0 +1,1 @@
+batch384: PASS gain=8.02% baseline(median=23797.849,p90=25595.058,worst=25817.030,cv=0.056) candidate(median=22031.032,p90=24730.666,worst=25563.829,cv=0.070)

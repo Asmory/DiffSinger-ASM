@@ -1,0 +1,80 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 31  of event 'cpu_atom/cycles/P'
+# Event count (approx.): 37838412
+#
+# Overhead  Command        Symbol                           IPC   [IPC Coverage]
+# ........  .............  ...............................  ....................
+#
+    56.19%  dsasm-vocoder  [.] ds_vocoder_conv1d_vnni_u8s8  -      -            
+            |
+            ---ds_vocoder_conv1d_vnni_u8s8
+               ds_vocoder_graph_infer
+               main
+               0x7fcd34627780
+               __libc_start_main_impl (inlined)
+               _start
+
+    17.05%  dsasm-vocoder  [.] 0x0000000000176707           -      -            
+            |
+            ---0x7fcd34776707
+               ds_vocoder_conv1d_ex_residual_f32_avx2
+               ds_vocoder_graph_infer
+               main
+               0x7fcd34627780
+               __libc_start_main_impl (inlined)
+               _start
+
+    12.78%  dsasm-vocoder  [.] .vec                         -      -            
+            |
+            ---.vec
+               main
+               0x7fcd34a30fff
+
+    10.88%  dsasm-vocoder  [.] ds_vocoder_graph_infer       -      -            
+            |
+            ---ds_vocoder_graph_infer
+               main
+               0x7fcd34627780
+               __libc_start_main_impl (inlined)
+               _start
+
+     3.10%  dsasm-vocoder  [.] pthread_cond_wait            -      -            
+            |
+            ---__pthread_cond_wait_common (inlined)
+               ___pthread_cond_wait (inlined)
+               ds_threadpool_run
+               ds_vocoder_conv1d_ex_residual_f32_avx2
+               ds_vocoder_graph_infer
+               main
+               0x7fcd34627780
+               __libc_start_main_impl (inlined)
+               _start
+
+
+
+# Samples: 13K of event 'cpu_core/cycles/P'
+# Event count (approx.): 28759799043
+#
+# Overhead  Command        Symbol                                                    IPC   [IPC Coverage]
+# ........  .............  ........................................................  ....................
+#
+    11.65%  dsasm-vocoder  [.] .m46_ci_11                                            -      -            
+    11.64%  dsasm-vocoder  [.] .m49r11_ci                                            -      -            
+    10.98%  dsasm-vocoder  [.] .vnni_conv_k4                                         -      -            
+     7.63%  dsasm-vocoder  [.] .m49r7_ci                                             -      -            
+     7.20%  dsasm-vocoder  [.] .m45_ci_7                                             -      -            
+     7.02%  dsasm-vocoder  [.] .m49r3_ci                                             -      -            
+     6.98%  dsasm-vocoder  [.] .m48_ci_3_t24                                         -      -            
+     5.13%  dsasm-vocoder  [.] .s8_group_ci                                          -      -            
+     4.51%  dsasm-vocoder  [.] .m58_rr11_ci                                          -      -            
+     4.45%  dsasm-vocoder  [.] .s2_vec_ci                                            -      -            
+     4.42%  dsasm-vocoder  [.] run_m_slice                                           -      -            
+     4.36%  dsasm-vocoder  [.] .m47_rci_11                                           -      -            
+     2.88%  dsasm-vocoder  [.] .m58_rr7_ci                                           -      -            
+     2.78%  dsasm-vocoder  [.] .m47_rci_7                                            -      -            
+     1.52%  dsasm-vocoder  [.] ds_vnni_pack_u8_4x8_avx2                              -      -            
+     1.42%  dsasm-vocoder  [.] .k_vec                                                -      -            

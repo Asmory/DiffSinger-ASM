@@ -275,6 +275,184 @@ ds_convtranspose1d_s2k4_oc_f32_avx2:
     ret
 .size ds_convtranspose1d_s2k4_oc_f32_avx2,.-ds_convtranspose1d_s2k4_oc_f32_avx2
 
+# Batch s2/k4 kernel for two adjacent output channels. Sharing the three input
+# vectors across both reductions reduces load traffic while preserving each
+# channel's original accumulation order.
+# void ds_convtranspose1d_s2k4_oc2_f32_avx2(
+#   const float *x, const float *w_oc2, const float *bias2, float *y_oc2,
+#   size_t Cin, size_t Tin);
+.globl ds_convtranspose1d_s2k4_oc2_f32_avx2
+.type ds_convtranspose1d_s2k4_oc2_f32_avx2,@function
+ds_convtranspose1d_s2k4_oc2_f32_avx2:
+    push rbp
+    mov rbp,rsp
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp,32
+
+    test r8,r8
+    jz .s2p_done
+    test r9,r9
+    jz .s2p_done
+    mov r12,rdi                    # x base
+    mov r13,rsi                    # weights for output channel 0
+    mov r14,rcx                    # output channel 0
+    mov r15,r8                     # Cin
+    mov rbx,r9                     # Tin
+    vmovss xmm0,DWORD PTR [rdx]
+    vmovss DWORD PTR [rsp],xmm0    # bias 0
+    vmovss xmm0,DWORD PTR [rdx+4]
+    vmovss DWORD PTR [rsp+4],xmm0  # bias 1
+    mov rax,r15
+    shl rax,4                      # Cin * 4 taps * sizeof(float)
+    lea r10,[r13+rax]
+    mov QWORD PTR [rsp+8],r10      # weights for output channel 1
+    mov rax,rbx
+    shl rax,3                      # 2 * Tin * sizeof(float)
+    lea r10,[r14+rax]
+    mov QWORD PTR [rsp+16],r10     # output channel 1
+    mov rax,rbx
+    shl rax,2
+    mov QWORD PTR [rsp+24],rax     # input row bytes
+
+    xor r9d,r9d
+    call .s2p_scalar_pair
+    mov r9,1
+.s2p_vec_check:
+    lea rax,[r9+8]
+    cmp rax,rbx
+    jae .s2p_scalar_tail
+
+    vbroadcastss ymm0,DWORD PTR [rsp]
+    vmovaps ymm1,ymm0
+    vbroadcastss ymm2,DWORD PTR [rsp+4]
+    vmovaps ymm3,ymm2
+    lea rdi,[r12+r9*4]             # current input row position
+    mov r10,r13
+    mov r11,QWORD PTR [rsp+8]
+    mov rcx,r15
+.s2p_vec_ci:
+    vmovups ymm4,YMMWORD PTR [rdi]
+    vmovups ymm5,YMMWORD PTR [rdi-4]
+    vmovups ymm6,YMMWORD PTR [rdi+4]
+
+    vbroadcastss ymm7,DWORD PTR [r10+4]
+    vfmadd231ps ymm0,ymm4,ymm7
+    vbroadcastss ymm7,DWORD PTR [r10+12]
+    vfmadd231ps ymm0,ymm5,ymm7
+    vbroadcastss ymm7,DWORD PTR [r10+8]
+    vfmadd231ps ymm1,ymm4,ymm7
+    vbroadcastss ymm7,DWORD PTR [r10]
+    vfmadd231ps ymm1,ymm6,ymm7
+
+    vbroadcastss ymm7,DWORD PTR [r11+4]
+    vfmadd231ps ymm2,ymm4,ymm7
+    vbroadcastss ymm7,DWORD PTR [r11+12]
+    vfmadd231ps ymm2,ymm5,ymm7
+    vbroadcastss ymm7,DWORD PTR [r11+8]
+    vfmadd231ps ymm3,ymm4,ymm7
+    vbroadcastss ymm7,DWORD PTR [r11]
+    vfmadd231ps ymm3,ymm6,ymm7
+
+    add rdi,QWORD PTR [rsp+24]
+    add r10,16
+    add r11,16
+    dec rcx
+    jnz .s2p_vec_ci
+
+    vunpcklps ymm4,ymm0,ymm1
+    vunpckhps ymm5,ymm0,ymm1
+    vperm2f128 ymm6,ymm4,ymm5,0x20
+    vperm2f128 ymm7,ymm4,ymm5,0x31
+    lea rax,[r9+r9]
+    vmovups YMMWORD PTR [r14+rax*4],ymm6
+    vmovups YMMWORD PTR [r14+rax*4+32],ymm7
+
+    vunpcklps ymm4,ymm2,ymm3
+    vunpckhps ymm5,ymm2,ymm3
+    vperm2f128 ymm6,ymm4,ymm5,0x20
+    vperm2f128 ymm7,ymm4,ymm5,0x31
+    mov rdx,QWORD PTR [rsp+16]
+    vmovups YMMWORD PTR [rdx+rax*4],ymm6
+    vmovups YMMWORD PTR [rdx+rax*4+32],ymm7
+    add r9,8
+    jmp .s2p_vec_check
+
+.s2p_scalar_tail:
+    cmp r9,rbx
+    jae .s2p_done
+.s2p_scalar_loop:
+    call .s2p_scalar_pair
+    inc r9
+    cmp r9,rbx
+    jb .s2p_scalar_loop
+    jmp .s2p_done
+
+# The return address shifts local-stack references by eight bytes here.
+.s2p_scalar_pair:
+    vmovss xmm0,DWORD PTR [rsp+8]
+    vmovss xmm1,DWORD PTR [rsp+8]
+    vmovss xmm2,DWORD PTR [rsp+12]
+    vmovss xmm3,DWORD PTR [rsp+12]
+    lea rdi,[r12+r9*4]
+    mov r10,r13
+    mov r11,QWORD PTR [rsp+16]
+    mov rcx,r15
+.s2p_scalar_ci:
+    vmovss xmm4,DWORD PTR [rdi]
+    vmovss xmm7,DWORD PTR [r10+4]
+    vfmadd231ss xmm0,xmm4,xmm7
+    vmovss xmm7,DWORD PTR [r10+8]
+    vfmadd231ss xmm1,xmm4,xmm7
+    vmovss xmm7,DWORD PTR [r11+4]
+    vfmadd231ss xmm2,xmm4,xmm7
+    vmovss xmm7,DWORD PTR [r11+8]
+    vfmadd231ss xmm3,xmm4,xmm7
+    test r9,r9
+    jz .s2p_no_prev
+    vmovss xmm5,DWORD PTR [rdi-4]
+    vmovss xmm7,DWORD PTR [r10+12]
+    vfmadd231ss xmm0,xmm5,xmm7
+    vmovss xmm7,DWORD PTR [r11+12]
+    vfmadd231ss xmm2,xmm5,xmm7
+.s2p_no_prev:
+    lea rax,[r9+1]
+    cmp rax,rbx
+    jae .s2p_no_next
+    vmovss xmm6,DWORD PTR [rdi+4]
+    vmovss xmm7,DWORD PTR [r10]
+    vfmadd231ss xmm1,xmm6,xmm7
+    vmovss xmm7,DWORD PTR [r11]
+    vfmadd231ss xmm3,xmm6,xmm7
+.s2p_no_next:
+    add rdi,QWORD PTR [rsp+32]
+    add r10,16
+    add r11,16
+    dec rcx
+    jnz .s2p_scalar_ci
+    lea rax,[r9+r9]
+    vmovss DWORD PTR [r14+rax*4],xmm0
+    vmovss DWORD PTR [r14+rax*4+4],xmm1
+    mov rdx,QWORD PTR [rsp+24]
+    vmovss DWORD PTR [rdx+rax*4],xmm2
+    vmovss DWORD PTR [rdx+rax*4+4],xmm3
+    ret
+
+.s2p_done:
+    vzeroupper
+    add rsp,32
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    pop rbp
+    ret
+.size ds_convtranspose1d_s2k4_oc2_f32_avx2,.-ds_convtranspose1d_s2k4_oc2_f32_avx2
+
 
 # M42 specialized NSF-HiFiGAN early upsampler:
 #   stride=8, K=16, pad=4, dilation=1, output_padding=0, Tout=8*Tin.

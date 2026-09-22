@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#include "dsasm_kernels.h"
 #include "dsasm_vocoder.h"
 #include "dsasm_threadpool.h"
 #include <math.h>
@@ -16,11 +17,18 @@ int main(int argc,char**argv){
     if(argc<2){fprintf(stderr,"usage: %s layer.dsvct33 [rounds]\n",argv[0]);return 2;}int rounds=argc>2?atoi(argv[2]):5;if(rounds<1)rounds=1;
     FILE*f=fopen(argv[1],"rb");if(!f){perror("fopen");return 2;}Header h;if(fread(&h,1,sizeof(h),f)!=sizeof(h)||memcmp(h.magic,"DSVCT33",7)||h.version!=1||h.dilation!=1||h.group!=1){puts("bad header");return 2;}
     size_t nb=h.Cout,nw=(size_t)h.Cout*h.Cin*h.K,nx=(size_t)h.Cin*h.Tin,ny=(size_t)h.Cout*h.Tout;
-    float*b=amalloc(nb*4),*w=amalloc(nw*4),*x=amalloc(nx*4),*ref=amalloc(ny*4),*y=amalloc(ny*4);if(!b||!w||!x||!ref||!y){puts("oom");return 2;}
+    float*b=amalloc(nb*4),*w=amalloc(nw*4),*x=amalloc(nx*4),*ref=amalloc(ny*4),*y=amalloc(ny*4),*pair=amalloc(ny*4);if(!b||!w||!x||!ref||!y||!pair){puts("oom");return 2;}
     if(fread(b,4,nb,f)!=nb||fread(w,4,nw,f)!=nw||fread(x,4,nx,f)!=nx||fread(ref,4,ny,f)!=ny){puts("short data");return 2;}fclose(f);
     const char *kernel=(h.K==4 && h.stride==2 && h.pad==1 && h.Tout==2*h.Tin)?"s2k4-time8":"generic-tap8";
     printf("M34 PURE-ASM ConvTranspose1d: kernel=%s Cin=%u Cout=%u K=%u Tin=%u Tout=%u stride=%u pad=%u nominal_MAC=%.3f M\n",kernel,h.Cin,h.Cout,h.K,h.Tin,h.Tout,h.stride,h.pad,(double)h.Cin*h.Tin*h.Cout*h.K/1e6);
     const int ths[]={1,2,4,8};float worst=0;double wrm=0;
+    if(h.K==4 && h.stride==2 && h.pad==1 && h.Tout==2*h.Tin && !(h.Cout&1u)){
+        for(size_t oc=0;oc<h.Cout;oc+=2u)
+            ds_convtranspose1d_s2k4_oc2_f32_avx2(x,w+oc*h.Cin*h.K,b+oc,pair+oc*h.Tout,h.Cin,h.Tin);
+        float ma;double rm;stats(pair,ref,ny,&ma,&rm);
+        printf("  ASM paired-output max_abs=%.8g rmse=%.8g\n",ma,rm);
+        if(ma>worst){worst=ma;wrm=rm;}
+    }
     for(size_t q=0;q<4;q++){
         DSAsmThreadPool*pool=ds_threadpool_create(ths[q]);if(!pool){puts("pool fail");return 2;}
         ds_vocoder_convtranspose1d_f32_avx2(x,w,b,y,h.Cin,h.Cout,h.K,h.Tin,h.pad,h.stride,pool);float ma;double rm;stats(y,ref,ny,&ma,&rm);if(ma>worst){worst=ma;wrm=rm;}

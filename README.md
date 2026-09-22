@@ -37,15 +37,18 @@ phrase WAV.
 
 ## Current CPU Performance
 
-Streaming and batch results are separate champions. Streaming is gated by its
-slowest region and occupied CPU capacity; batch rendering is gated by median
-complete E2E wall time. Neither result is promoted by comparing it with the
-other architecture.
+Streaming and batch results are separate champions. For streaming, worst-region
+RTF below 1 is a real-time feasibility boundary: every block must finish before
+its playable audio is exhausted. It is not the score to minimize after the
+service gate passes. The optimization objective then moves to CPU-RTF and
+concurrent-track capacity while preserving zero deadline misses. Batch rendering
+continues to optimize complete E2E wall-time RTF. Results are never promoted by
+comparing one architecture with the other.
 
 | Contract | Current champion |
 | --- | ---: |
 | Streaming workload | 32 frames, 25 measured regions after 10 warm-ups |
-| Streaming worst region RTF | **0.996841** maximum across three runs |
+| Streaming service gate | **0.996841** largest worst-region RTF across three runs; required `< 1` |
 | Streaming CPU-RTF | **2.391249** maximum across three runs |
 | Streaming deadlines | **0 misses in every run** |
 | Streaming waveform quality | cosine 0.999292, SNR 28.49 dB |
@@ -68,6 +71,37 @@ See the [streaming policy and evidence](docs/STREAMING_PERFORMANCE.md), the
 Historical M55/M58 long-audio results remain in
 [the performance record](docs/PERFORMANCE.md), but are not current streaming or
 fixed-block champions. Results on other CPUs and voicebanks will vary.
+
+## Why Two Rendering Architectures?
+
+Interactive playback and offline rendering put pressure on different parts of
+the system. One block size cannot minimize response time and maximize sustained
+throughput at the same time, so DiffSinger-ASM supplies two independently tuned
+engines:
+
+| Mode | Used for | Execution shape | Performance focus |
+| --- | --- | --- | --- |
+| Real-time streaming | Playback while editing | 32-frame vocoder buckets, 8-frame overlap, 4 workers, progressive PCM callbacks | Service constraint: worst-region RTF below 1 with zero deadline misses. Optimization after that: CPU-RTF and concurrent-track capacity |
+| Block batch | Pre-render, mixdown, and export | 384-frame buckets, no overlap, 8 workers, complete blocks | End-to-end throughput, aggregate RTF, p90 and worst latency, and run-to-run stability |
+
+Small streaming blocks bound the time before the mixer receives audio, but
+they repeat scheduling, synchronization, and overlap work more often. Large
+batch blocks amortize that overhead and keep more arithmetic in flight, but
+waiting for a large block would make interactive playback feel unresponsive.
+Separate worker counts and kernels let each workload optimize the cost that its
+user actually notices.
+
+The streaming metrics form a staged optimization gradient. Before the service
+gate is reached, reducing the largest worst-region RTF is necessary. After it
+is reached, a lower RTF does not by itself make a better streaming engine: a
+candidate advances by reducing CPU-RTF and increasing usable track capacity
+while every region remains below 1 and every deadline still passes. Batch RTF
+has a different meaning because batch users are waiting for the complete job.
+
+The modes are execution choices, not quality levels. Both pass the same model
+correctness and waveform quality gates, and both declare output compatibility
+revision 1. Once either mode completes a phrase, OpenUtau may reuse that
+canonical PCM for later playback, pre-rendering, mixdown, or export.
 
 ## Why Native Assembly?
 
@@ -110,56 +144,70 @@ DiffSinger-ASM for the acoustic and vocoder execution stages:
 - [DiffSinger paper](https://arxiv.org/abs/2105.02446) and
   [OpenVPI implementation](https://github.com/openvpi/DiffSinger)
 
-## Requirements
+## Install and Use
 
-### Native runtime
+DiffSinger-ASM is used through the matching OpenUtau build. Normal users do not
+need a compiler, Python, ONNX Runtime, or command-line setup.
 
-- Linux on x86-64
-- GCC or Clang, GNU Make, and binutils
-- AVX2 and FMA; the promoted configuration additionally requires AVX-VNNI
-- pthread, libc, and libm
+1. Download and extract the Linux x64 build from
+   [AntheaLaffy's OpenUtau releases](https://github.com/AntheaLaffy/OpenUtau/releases).
+2. Download and extract the latest
+   [DiffSinger-ASM provider](https://github.com/Asmory/DiffSinger-ASM/releases/latest).
+   In OpenUtau, open **Preferences > Rendering**, select the provider's
+   `lib/libdsasm.so` under **DiffSinger ASM native library**, and confirm that
+   its status is ready.
+3. On a DiffSinger track, select **DIFFSINGER-ASM** as the renderer.
+4. Open **Tools > Singers**, select the voicebank, and choose
+   **Convert current model**. OpenUtau retains the ONNX source and publishes the
+   converted model only after validation succeeds.
 
-Check the relevant CPU features before enabling the release profile:
+The singer is ready when its status changes to **ASM model installed**.
+Complete pre-renders and completed real-time renders share the canonical PCM
+cache, so playback reuses audio OpenUtau has already rendered.
+
+The provider currently requires Linux x86-64 with AVX2 and FMA. Conversion adds
+about 550 MB per singer and can take several minutes. Unsupported model graphs
+are reported without modifying the source voicebank.
+
+## Develop and Use the CLI
+
+The release package already includes its offline dependencies. A source
+checkout needs a C toolchain, GNU Make, binutils, CPython 3.12, and `uv`:
+
+```bash
+git clone https://github.com/Asmory/DiffSinger-ASM.git
+cd DiffSinger-ASM
+python3.12 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r tools/model-tool-requirements.in
+```
+
+Install PyTorch in this environment when working on checkpoint importers or
+golden/parity validation. Install Linux `perf` when profiling. See the
+[developer guide](docs/DEVELOPER_GUIDE.md) for dependency boundaries, repository
+layout, agent and tool routing, experiment scheduling, validation gates,
+benchmark rules, packaging, and OpenUtau integration. It translates the core
+rules in `AGENTS.md` into a workflow intended for both human contributors and
+coding agents.
+
+### Build from source
+
+```bash
+make -j"$(nproc)" engine-check
+make -j"$(nproc)" package VERSION=v0.2.2
+```
+
+This produces `build/libdsasm.so` and a self-contained archive under
+`release/`. The package embeds Python, NumPy, ONNX, and ONNX Runtime for offline
+conversion; native inference does not load them.
+
+Check CPU features when testing a local build:
 
 ```bash
 grep -m1 -oE 'avx2|fma|avx_vnni' /proc/cpuinfo | sort -u
 ```
 
-### Building the offline model tool
-
-- `uv` and a managed CPython 3.12 runtime
-- Network access for the first package build; pinned downloads are cached under
-  `build/package-cache`
-
-The release package embeds CPython 3.12 and all locked dependencies, so product
-users do not install Python, NumPy, ONNX, or ONNX Runtime separately. PyTorch is
-only needed by development checkpoint importers and parity tools.
-
-## Quick Start
-
-Build the product shared library and its ABI checks:
-
-```bash
-git clone https://github.com/Asmory/DiffSinger-ASM.git
-cd DiffSinger-ASM
-make -j"$(nproc)" engine-check
-```
-
-This produces `build/libdsasm.so`. The opaque engine keeps models, one shared
-worker pool, and inference buffers resident, then publishes vocoder output as
-contiguous PCM callbacks. See [the engine ABI and frame-bucket contract](docs/ENGINE_ABI.md).
-
-Build the self-contained provider package:
-
-```bash
-make -j"$(nproc)" package VERSION=v0.2.2
-```
-
-The archive under `release/` contains `lib/libdsasm.so` and the independently
-callable `bin/dsasm-model-tool`. Its embedded Python dependencies are exact and
-hash-locked.
-
-### Offline model preparation
+### Model protocol CLI
 
 Inspect, plan, convert into caller-owned staging, and validate without loading
 the native runtime:
@@ -199,14 +247,6 @@ inspection, parity checks, and debugging:
 make -j"$(nproc)" build/dsasm-acoustic build/dsasm-vocoder-m40
 ```
 
-Create a development environment for direct packer use:
-
-```bash
-python -m venv .venv
-. .venv/bin/activate
-python -m pip install numpy onnx onnxruntime
-```
-
 Pack the acoustic model into the singer's default ASM directory:
 
 ```bash
@@ -233,13 +273,13 @@ for frames in 32 384; do
 done
 ```
 
-### OpenUtau
+### OpenUtau package discovery
 
-Build or install the OpenUtau integration referenced above, then point it at
-the extracted provider package's `lib/libdsasm.so`. OpenUtau discovers
-`bin/dsasm-model-tool` from the same package root. A source checkout may still
-be used for development through `DIFFSINGER_ASM_HOME` and the explicit
-`OPENUTAU_DSASM_MODEL_TOOL` override.
+Selecting an extracted provider's `lib/libdsasm.so` lets OpenUtau discover
+`bin/dsasm-model-tool` from the same package root. Automated deployments may
+set `OPENUTAU_DSASM_LIBRARY` to the library. Source-checkout development may
+use `DIFFSINGER_ASM_HOME` and the explicit `OPENUTAU_DSASM_MODEL_TOOL`
+override.
 
 Published singers use an immutable generation selected by one pointer:
 
@@ -268,6 +308,8 @@ final chunk arrives.
 The native engine exposes separate four-worker/32-frame real-time and
 eight-worker/384-frame batch modes. OpenUtau chooses the mode from whether the
 render is consumed progressively during playback or as a complete block.
+
+### Direct inference CLI
 
 For standalone CLI debugging, text vector files accept whitespace- or
 comma-separated values; F0 and optional variance curves contain one value per
@@ -378,6 +420,7 @@ stable product boundary; lower-level headers remain implementation-oriented.
 
 ## Documentation
 
+- [Developer guide](docs/DEVELOPER_GUIDE.md)
 - [Performance policy and current evidence](docs/PERFORMANCE.md)
 - [Dual-architecture optimization strategy](docs/DUAL_ARCHITECTURE_OPTIMIZATION.md)
 - [Real-time streaming performance policy](docs/STREAMING_PERFORMANCE.md)
